@@ -192,7 +192,28 @@ def get_reference_backend(backend_name: Optional[str] = None):
     """Optional backend used either directly or to mimic a noise profile."""
     service = ensure_runtime_service()
     target_backend = backend_name or IBM_BACKEND_NAME
+    if target_backend == "auto":
+        candidates = []
+        for backend in service.backends(simulator=False):
+            try:
+                status = backend.status()
+            except Exception:
+                continue
+            if not getattr(status, "operational", False):
+                continue
+            candidates.append((status.pending_jobs, backend.name, backend))
+        if not candidates:
+            raise RuntimeError("No operational IBM hardware backends are available for this account.")
+        candidates.sort(key=lambda item: (item[0], item[1]))
+        pending_jobs, target_backend, backend = candidates[0]
+        print(f"[backend] auto-selected {target_backend} (pending_jobs={pending_jobs})", flush=True)
+        return backend
     backend = service.backend(target_backend)
+    try:
+        status = backend.status()
+        print(f"[backend] selected {backend.name} (pending_jobs={status.pending_jobs}, status={status.status_msg})", flush=True)
+    except Exception:
+        print(f"[backend] selected {backend.name}", flush=True)
     return backend
 
 
@@ -274,6 +295,7 @@ def run_sampler_circuits(backend, compiled_circuits: List[QuantumCircuit], shots
         },
     )
     job = sampler.run(compiled_circuits, shots=shots)
+    print(f"[hardware] sampler job submitted: {job.job_id()}", flush=True)
     result = job.result()
 
     counts_list: List[Dict[str, int]] = []
@@ -1376,6 +1398,11 @@ def parse_args() -> ExperimentConfig:
 def main() -> None:
     set_seeds(SEED)
     config = parse_args()
+    print(
+        f"[startup] real_backend={config.use_real_backend} backend_mimic={config.use_backend_mimic} "
+        f"backend_name={config.backend_name} shots={config.shots} smoke_test={config.smoke_test}",
+        flush=True,
+    )
 
     contextual = build_contextuality_preserving_prep()
     contextual.name = "contextuality-preserving"

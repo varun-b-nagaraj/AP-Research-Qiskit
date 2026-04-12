@@ -1,7 +1,0 @@
-noise_level,mitigated,query_name,row_index,column_index,win_probability,fidelity,trace_distance
-low,False,R2C2,2,2,0.914062,0.909644,0.097656
-low,False,R3C3,3,3,0.917969,0.913797,0.09375
-low,False,R3C2,3,2,0.917969,0.914362,0.089844
-low,True,R3C1,3,1,0.935798,0.928444,0.093385
-low,True,R2C2,2,2,0.93666,0.929158,0.097169
-low,True,R3C3,3,3,0.93666,0.929661,0.09309

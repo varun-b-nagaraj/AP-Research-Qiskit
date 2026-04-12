@@ -1,7 +1,0 @@
-circuit_type,noise_level,mitigated,backend,shots_per_context,zne_scale_factors,fidelity,trace_distance,contextuality_violation,win_probability
-baseline,high,False,local_aer_noise_model,8192,[1],0.7641107147242415,0.23578559027777743,0.0,0.7642144097222222
-contextuality-preserving,high,False,local_aer_noise_model,8192,[1],0.8122896822130314,0.18759494357638867,0.0,0.8124050564236112
-baseline,low,False,local_aer_noise_model,8192,[1],0.9308603649690883,0.06901041666666635,0.3789062500000006,0.9309895833333334
-contextuality-preserving,low,False,local_aer_noise_model,8192,[1],0.9478681975215208,0.05208333333333315,0.5318603515625,0.9479844835069444
-baseline,medium,False,local_aer_noise_model,8192,[1],0.8652225568061119,0.13461642795138853,0.0,0.8653835720486112
-contextuality-preserving,medium,False,local_aer_noise_model,8192,[1],0.8959331414854894,0.10392252604166646,0.06469726562500075,0.8960774739583334
