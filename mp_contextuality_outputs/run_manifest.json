@@ -1,0 +1,36 @@
+{
+  "backend_name": "auto",
+  "circuit_types": [
+    "contextuality-preserving",
+    "baseline"
+  ],
+  "contexts": [
+    "R1C1",
+    "R1C2",
+    "R1C3",
+    "R2C1",
+    "R2C2",
+    "R2C3",
+    "R3C1",
+    "R3C2",
+    "R3C3"
+  ],
+  "generated_at_unix": 1776032839.3492742,
+  "mitigation_modes": [
+    false,
+    true
+  ],
+  "noise_levels": [
+    "hardware"
+  ],
+  "seed": 7,
+  "shots": 8192,
+  "smoke_test": false,
+  "use_backend_mimic": false,
+  "use_real_backend": true,
+  "zne_scale_factors": [
+    1,
+    3,
+    5
+  ]
+}

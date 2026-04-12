@@ -1,0 +1,7 @@
+noise_level,mitigated,query_name,row_index,column_index,win_probability,fidelity,trace_distance
+hardware,False,R2C2,2,2,0.747437,0.747163,0.252563
+hardware,False,R3C2,3,2,0.753052,0.752741,0.246948
+hardware,False,R3C2,3,2,0.773193,0.77295,0.226807
+hardware,True,R3C2,3,2,0.811768,0.811154,0.188232
+hardware,True,R3C2,3,2,0.824295,0.822936,0.175705
+hardware,True,R2C2,2,2,0.84343,0.842253,0.15657

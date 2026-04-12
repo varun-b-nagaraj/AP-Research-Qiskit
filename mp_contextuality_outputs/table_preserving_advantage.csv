@@ -1,0 +1,3 @@
+noise_level,mitigated,delta_win_probability,delta_contextuality,delta_fidelity,delta_trace_distance
+hardware,False,0.019843,0.0,0.019886,-0.019843
+hardware,True,0.012092,0.038943,0.011957,-0.009168

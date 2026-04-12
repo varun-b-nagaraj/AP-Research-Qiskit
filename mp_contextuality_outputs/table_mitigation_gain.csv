@@ -1,0 +1,3 @@
+circuit_type,noise_level,gain_win_probability,gain_contextuality,gain_fidelity,gain_trace_distance
+baseline,hardware,0.088847,0.0,0.088,-0.087436
+contextuality-preserving,hardware,0.081096,0.038943,0.080071,-0.076761
