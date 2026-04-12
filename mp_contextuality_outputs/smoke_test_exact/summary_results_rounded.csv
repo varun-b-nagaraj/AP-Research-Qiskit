@@ -1,5 +1,0 @@
-circuit_type,noise_level,mitigated,backend,shots_per_context,zne_scale_factors,fidelity,trace_distance,contextuality_violation,witness
-contextuality-preserving,low,False,local_aer_noise_model,256,[1],0.972416,0.04362,1.0,6.0
-baseline,low,False,local_aer_noise_model,256,[1],0.967875,0.046875,1.0,6.0
-contextuality-preserving,low,True,local_aer_noise_model,256,"[1, 3]",0.979868,0.052315,1.0,6.0
-baseline,low,True,local_aer_noise_model,256,"[1, 3]",0.973502,0.062735,1.0,6.0

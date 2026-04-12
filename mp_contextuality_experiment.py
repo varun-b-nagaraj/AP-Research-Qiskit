@@ -856,6 +856,173 @@ def validate_probability_distributions(context_df: pd.DataFrame) -> None:
         raise ValueError(f"Non-normalized context distributions detected:\n{bad_rows.to_string(index=False)}")
 
 
+def build_interpretable_summary_tables(
+    summary_df: pd.DataFrame,
+    query_df: pd.DataFrame,
+) -> Dict[str, pd.DataFrame]:
+    summary = summary_df.copy()
+    summary["mitigation_label"] = summary["mitigated"].map({False: "pre", True: "post"})
+    summary["circuit_short"] = summary["circuit_type"].replace(
+        {
+            "contextuality-preserving": "preserving",
+            "baseline": "baseline",
+        }
+    )
+
+    paper_summary = (
+        summary[
+            [
+                "noise_level",
+                "circuit_type",
+                "mitigated",
+                "win_probability",
+                "contextuality_violation",
+                "fidelity",
+                "trace_distance",
+            ]
+        ]
+        .sort_values(["noise_level", "mitigated", "circuit_type"])
+        .reset_index(drop=True)
+    )
+
+    fidelity_table = (
+        summary.pivot_table(
+            index="noise_level",
+            columns=["circuit_short", "mitigation_label"],
+            values="fidelity",
+        )
+        .reindex(DEFAULT_NOISE_LEVEL_ORDER)
+        .round(6)
+    )
+
+    win_rate_table = (
+        summary.pivot_table(
+            index="noise_level",
+            columns=["circuit_short", "mitigation_label"],
+            values="win_probability",
+        )
+        .reindex(DEFAULT_NOISE_LEVEL_ORDER)
+        .round(6)
+    )
+
+    contextuality_table = (
+        summary.pivot_table(
+            index="noise_level",
+            columns=["circuit_short", "mitigation_label"],
+            values="contextuality_violation",
+        )
+        .reindex(DEFAULT_NOISE_LEVEL_ORDER)
+        .round(6)
+    )
+
+    preserving_vs_baseline = (
+        summary.pivot_table(
+            index=["noise_level", "mitigated"],
+            columns="circuit_type",
+            values=["win_probability", "fidelity", "trace_distance", "contextuality_violation"],
+        )
+        .sort_index()
+    )
+    delta_rows = []
+    for (noise_level, mitigated), row in preserving_vs_baseline.iterrows():
+        delta_rows.append(
+            {
+                "noise_level": noise_level,
+                "mitigated": mitigated,
+                "delta_win_probability": row[("win_probability", "contextuality-preserving")] - row[("win_probability", "baseline")],
+                "delta_contextuality": row[("contextuality_violation", "contextuality-preserving")] - row[("contextuality_violation", "baseline")],
+                "delta_fidelity": row[("fidelity", "contextuality-preserving")] - row[("fidelity", "baseline")],
+                "delta_trace_distance": row[("trace_distance", "contextuality-preserving")] - row[("trace_distance", "baseline")],
+            }
+        )
+    delta_table = pd.DataFrame(delta_rows).round(6)
+
+    mitigation_gain_rows = []
+    for circuit_type, sub in summary.groupby("circuit_type"):
+        pre = sub[sub["mitigated"] == False].set_index("noise_level")
+        post = sub[sub["mitigated"] == True].set_index("noise_level")
+        shared = pre.index.intersection(post.index)
+        for noise_level in shared:
+            mitigation_gain_rows.append(
+                {
+                    "circuit_type": circuit_type,
+                    "noise_level": noise_level,
+                    "gain_win_probability": post.loc[noise_level, "win_probability"] - pre.loc[noise_level, "win_probability"],
+                    "gain_contextuality": post.loc[noise_level, "contextuality_violation"] - pre.loc[noise_level, "contextuality_violation"],
+                    "gain_fidelity": post.loc[noise_level, "fidelity"] - pre.loc[noise_level, "fidelity"],
+                    "gain_trace_distance": post.loc[noise_level, "trace_distance"] - pre.loc[noise_level, "trace_distance"],
+                }
+            )
+    mitigation_gain_table = pd.DataFrame(mitigation_gain_rows).round(6)
+
+    query = query_df.copy()
+    query["mitigation_label"] = query["mitigated"].map({False: "pre", True: "post"})
+    query_weakest = (
+        query.sort_values(["noise_level", "mitigated", "win_probability", "trace_distance"], ascending=[True, True, True, False])
+        .groupby(["noise_level", "mitigated"])
+        .head(3)
+        [
+            [
+                "noise_level",
+                "mitigated",
+                "query_name",
+                "row_index",
+                "column_index",
+                "win_probability",
+                "fidelity",
+                "trace_distance",
+            ]
+        ]
+        .reset_index(drop=True)
+        .round(6)
+    )
+
+    return {
+        "paper_summary": paper_summary.round(6),
+        "fidelity_table": fidelity_table,
+        "win_rate_table": win_rate_table,
+        "contextuality_table": contextuality_table,
+        "preserving_advantage": delta_table,
+        "mitigation_gain": mitigation_gain_table,
+        "weakest_queries": query_weakest,
+    }
+
+
+def write_text_report(
+    summary_df: pd.DataFrame,
+    query_df: pd.DataFrame,
+    outpath: Path,
+) -> None:
+    best = summary_df.sort_values(["win_probability", "fidelity"], ascending=[False, False]).iloc[0]
+    worst = summary_df.sort_values(["win_probability", "fidelity"], ascending=[True, True]).iloc[0]
+    pre = summary_df[summary_df["mitigated"] == False]
+    post = summary_df[summary_df["mitigated"] == True]
+    preserving_pre = pre[pre["circuit_type"] == "contextuality-preserving"]["win_probability"].mean()
+    baseline_pre = pre[pre["circuit_type"] == "baseline"]["win_probability"].mean()
+    preserving_post = post[post["circuit_type"] == "contextuality-preserving"]["win_probability"].mean()
+    baseline_post = post[post["circuit_type"] == "baseline"]["win_probability"].mean()
+
+    weakest = query_df.sort_values(["win_probability", "trace_distance"], ascending=[True, False]).head(5)
+
+    lines = [
+        "Mermin-Peres Magic-Square Experiment Report",
+        "",
+        "Headline findings",
+        f"- Best condition: {best['circuit_type']} at {best['noise_level']} noise with mitigated={best['mitigated']}, win_probability={best['win_probability']:.6f}, fidelity={best['fidelity']:.6f}, contextuality={best['contextuality_violation']:.6f}",
+        f"- Worst condition: {worst['circuit_type']} at {worst['noise_level']} noise with mitigated={worst['mitigated']}, win_probability={worst['win_probability']:.6f}, fidelity={worst['fidelity']:.6f}, contextuality={worst['contextuality_violation']:.6f}",
+        f"- Mean pre-mitigation win rate: preserving={preserving_pre:.6f}, baseline={baseline_pre:.6f}",
+        f"- Mean post-mitigation win rate: preserving={preserving_post:.6f}, baseline={baseline_post:.6f}",
+        "",
+        "Weakest query pairs overall",
+    ]
+    for _, row in weakest.iterrows():
+        lines.append(
+            f"- {row['query_name']} ({row['circuit_type']}, noise={row['noise_level']}, mitigated={row['mitigated']}): "
+            f"win_probability={row['win_probability']:.6f}, fidelity={row['fidelity']:.6f}, trace_distance={row['trace_distance']:.6f}"
+        )
+    outpath.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def plot_fidelity_by_noise(df: pd.DataFrame, outpath: Path) -> None:
     pivot = (
         df[df["mitigated"] == False]
@@ -869,6 +1036,26 @@ def plot_fidelity_by_noise(df: pd.DataFrame, outpath: Path) -> None:
     plt.title("Mean Fidelity as a Function of Noise Level")
     plt.xlabel("Noise level")
     plt.ylabel("Mean fidelity")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(outpath, dpi=200)
+    plt.close()
+
+
+def plot_win_probability_by_noise(df: pd.DataFrame, outpath: Path) -> None:
+    pivot = (
+        df[df["mitigated"] == False]
+        .pivot(index="noise_level", columns="circuit_type", values="win_probability")
+        .reindex(["low", "medium", "high"])
+    )
+
+    plt.figure(figsize=(7, 5))
+    for col in pivot.columns:
+        plt.plot(pivot.index, pivot[col], marker="o", label=col)
+    plt.axhline(NONCONTEXTUAL_WIN_BOUND, color="#444444", linestyle="--", linewidth=1, label="classical bound")
+    plt.title("Magic-Square Win Rate vs Noise Level")
+    plt.xlabel("Noise level")
+    plt.ylabel("Mean win probability")
     plt.legend()
     plt.tight_layout()
     plt.savefig(outpath, dpi=200)
@@ -901,6 +1088,37 @@ def plot_contextuality_by_noise(df: pd.DataFrame, outpath: Path) -> None:
     plt.tight_layout()
     plt.savefig(outpath, dpi=200)
     plt.close()
+
+
+def plot_query_heatmaps(query_df: pd.DataFrame, outdir: Path) -> None:
+    for metric, title, stem in [
+        ("win_probability", "Per-Query Win Probability", "figure_query_win_heatmap"),
+        ("trace_distance", "Per-Query Trace Distance", "figure_query_trace_distance_heatmap"),
+    ]:
+        for mitigated in [False, True]:
+            subset = query_df[query_df["mitigated"] == mitigated]
+            fig, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
+            for ax, circuit_type in zip(axes, ["contextuality-preserving", "baseline"]):
+                data = (
+                    subset[subset["circuit_type"] == circuit_type]
+                    .groupby(["row_index", "column_index"], as_index=False)[metric]
+                    .mean()
+                    .pivot(index="row_index", columns="column_index", values=metric)
+                    .reindex(index=[1, 2, 3], columns=[1, 2, 3])
+                )
+                im = ax.imshow(data.values, cmap="viridis" if metric == "win_probability" else "magma", aspect="equal")
+                ax.set_title(circuit_type)
+                ax.set_xlabel("Column query")
+                ax.set_ylabel("Row query")
+                ax.set_xticks([0, 1, 2], labels=["C1", "C2", "C3"])
+                ax.set_yticks([0, 1, 2], labels=["R1", "R2", "R3"])
+                for i in range(3):
+                    for j in range(3):
+                        ax.text(j, i, f"{data.values[i, j]:.3f}", ha="center", va="center", color="white", fontsize=8)
+            fig.suptitle(f"{title} ({'post-mitigation' if mitigated else 'pre-mitigation'})")
+            fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.9)
+            fig.savefig(outdir / f"{stem}_{'post' if mitigated else 'pre'}.png", dpi=200)
+            plt.close(fig)
 
 
 def plot_contextuality_vs_fidelity(df: pd.DataFrame, outpath: Path) -> None:
@@ -1115,6 +1333,7 @@ def main() -> None:
 
     save_dataframe(df, config.outdir / "summary_results.csv")
     save_dataframe(context_df, config.outdir / "context_results.csv")
+    save_dataframe(context_df, config.outdir / "query_results.csv")
 
     # Save a rounded version too
     df_rounded = df.copy()
@@ -1122,13 +1341,25 @@ def main() -> None:
         df_rounded[col] = df_rounded[col].round(6)
     save_dataframe(df_rounded, config.outdir / "summary_results_rounded.csv")
 
+    summary_tables = build_interpretable_summary_tables(df, context_df)
+    save_dataframe(summary_tables["paper_summary"], config.outdir / "table_paper_summary.csv")
+    summary_tables["fidelity_table"].to_csv(config.outdir / "table_fidelity_by_noise.csv")
+    summary_tables["win_rate_table"].to_csv(config.outdir / "table_win_rate_by_noise.csv")
+    summary_tables["contextuality_table"].to_csv(config.outdir / "table_contextuality_by_noise.csv")
+    save_dataframe(summary_tables["preserving_advantage"], config.outdir / "table_preserving_advantage.csv")
+    save_dataframe(summary_tables["mitigation_gain"], config.outdir / "table_mitigation_gain.csv")
+    save_dataframe(summary_tables["weakest_queries"], config.outdir / "table_weakest_queries.csv")
+    write_text_report(df, context_df, config.outdir / "results_report.txt")
+
     # Plots similar to the paper
     if set(config.noise_levels) >= {"low", "medium", "high"} and len(config.noise_levels) >= 3:
         plot_fidelity_by_noise(df, config.outdir / "figure_fidelity_vs_noise.png")
+        plot_win_probability_by_noise(df, config.outdir / "figure_win_rate_vs_noise.png")
         plot_contextuality_by_noise(df, config.outdir / "figure_contextuality_vs_noise.png")
     plot_contextuality_vs_fidelity(df, config.outdir / "figure_contextuality_vs_fidelity.png")
     if set(config.mitigation_modes) >= {False, True}:
         plot_pre_post_mitigation(df, config.outdir / "figure_pre_post_mitigation.png")
+        plot_query_heatmaps(context_df, config.outdir)
 
     print("\n=== Finished ===")
     print(df_rounded.to_string(index=False))
