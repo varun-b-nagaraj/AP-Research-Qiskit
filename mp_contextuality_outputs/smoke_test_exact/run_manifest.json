@@ -1,0 +1,32 @@
+{
+  "backend_name": "ibm_brisbane",
+  "circuit_types": [
+    "contextuality-preserving",
+    "baseline"
+  ],
+  "contexts": [
+    "R1",
+    "R2",
+    "R3",
+    "C1",
+    "C2",
+    "C3"
+  ],
+  "generated_at_unix": 1776019244.963671,
+  "mitigation_modes": [
+    false,
+    true
+  ],
+  "noise_levels": [
+    "low"
+  ],
+  "seed": 7,
+  "shots": 256,
+  "smoke_test": true,
+  "use_backend_mimic": false,
+  "use_real_backend": false,
+  "zne_scale_factors": [
+    1,
+    3
+  ]
+}
