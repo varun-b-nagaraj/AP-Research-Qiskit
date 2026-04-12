@@ -959,7 +959,7 @@ def save_excel_workbook(
     query_df: pd.DataFrame,
     summary_tables: Dict[str, pd.DataFrame],
     manifest: Dict,
-) -> None:
+) -> Tuple[bool, str]:
     """
     Write a single Excel workbook containing the raw outputs and all derived tables.
     """
@@ -967,7 +967,19 @@ def save_excel_workbook(
         [{"key": key, "value": json.dumps(value) if isinstance(value, (dict, list)) else value} for key, value in manifest.items()]
     )
 
-    with pd.ExcelWriter(outpath, engine="openpyxl") as writer:
+    engine = None
+    for candidate in ("openpyxl", "xlsxwriter"):
+        try:
+            __import__(candidate)
+            engine = candidate
+            break
+        except Exception:
+            continue
+
+    if engine is None:
+        return False, "Excel export skipped: install `openpyxl` or `xlsxwriter` in the active environment."
+
+    with pd.ExcelWriter(outpath, engine=engine) as writer:
         summary_df.to_excel(writer, sheet_name="summary", index=False)
         query_df.to_excel(writer, sheet_name="queries", index=False)
         manifest_df.to_excel(writer, sheet_name="manifest", index=False)
@@ -978,6 +990,7 @@ def save_excel_workbook(
         summary_tables["preserving_advantage"].to_excel(writer, sheet_name="preserving_advantage", index=False)
         summary_tables["mitigation_gain"].to_excel(writer, sheet_name="mitigation_gain", index=False)
         summary_tables["weakest_queries"].to_excel(writer, sheet_name="weakest_queries", index=False)
+    return True, f"Saved Excel workbook with engine `{engine}`."
 
 
 def save_json(payload: Dict, path: Path) -> None:
@@ -992,6 +1005,13 @@ def validate_probability_distributions(context_df: pd.DataFrame) -> None:
     if not np.allclose(sums.values, np.ones(len(sums)), atol=1e-8):
         bad_rows = context_df.loc[~np.isclose(sums.values, 1.0, atol=1e-8)]
         raise ValueError(f"Non-normalized context distributions detected:\n{bad_rows.to_string(index=False)}")
+
+
+def ordered_noise_levels(values: Iterable[str]) -> List[str]:
+    values = list(dict.fromkeys(values))
+    preferred = [level for level in DEFAULT_NOISE_LEVEL_ORDER if level in values]
+    extras = [level for level in values if level not in preferred]
+    return preferred + extras
 
 
 def build_interpretable_summary_tables(
@@ -1029,7 +1049,7 @@ def build_interpretable_summary_tables(
             columns=["circuit_short", "mitigation_label"],
             values="fidelity",
         )
-        .reindex(DEFAULT_NOISE_LEVEL_ORDER)
+        .reindex(ordered_noise_levels(summary["noise_level"]))
         .round(6)
     )
 
@@ -1039,7 +1059,7 @@ def build_interpretable_summary_tables(
             columns=["circuit_short", "mitigation_label"],
             values="win_probability",
         )
-        .reindex(DEFAULT_NOISE_LEVEL_ORDER)
+        .reindex(ordered_noise_levels(summary["noise_level"]))
         .round(6)
     )
 
@@ -1049,7 +1069,7 @@ def build_interpretable_summary_tables(
             columns=["circuit_short", "mitigation_label"],
             values="contextuality_violation",
         )
-        .reindex(DEFAULT_NOISE_LEVEL_ORDER)
+        .reindex(ordered_noise_levels(summary["noise_level"]))
         .round(6)
     )
 
@@ -1162,10 +1182,11 @@ def write_text_report(
 
 
 def plot_fidelity_by_noise(df: pd.DataFrame, outpath: Path) -> None:
+    noise_order = ordered_noise_levels(df["noise_level"].unique())
     pivot = (
         df[df["mitigated"] == False]
         .pivot(index="noise_level", columns="circuit_type", values="fidelity")
-        .reindex(["low", "medium", "high"])
+        .reindex(noise_order)
     )
 
     plt.figure(figsize=(7, 5))
@@ -1191,10 +1212,11 @@ def plot_fidelity_by_noise(df: pd.DataFrame, outpath: Path) -> None:
 
 
 def plot_win_probability_by_noise(df: pd.DataFrame, outpath: Path) -> None:
+    noise_order = ordered_noise_levels(df["noise_level"].unique())
     pivot = (
         df[df["mitigated"] == False]
         .pivot(index="noise_level", columns="circuit_type", values="win_probability")
-        .reindex(["low", "medium", "high"])
+        .reindex(noise_order)
     )
 
     plt.figure(figsize=(7, 5))
@@ -1211,10 +1233,11 @@ def plot_win_probability_by_noise(df: pd.DataFrame, outpath: Path) -> None:
 
 
 def plot_contextuality_by_noise(df: pd.DataFrame, outpath: Path) -> None:
+    noise_order = ordered_noise_levels(df["noise_level"].unique())
     pivot = (
         df[df["mitigated"] == False]
         .pivot(index="noise_level", columns="circuit_type", values="contextuality_violation")
-        .reindex(["low", "medium", "high"])
+        .reindex(noise_order)
     )
 
     plt.figure(figsize=(7, 5))
@@ -1509,7 +1532,7 @@ def main() -> None:
     save_dataframe(summary_tables["mitigation_gain"], config.outdir / "table_mitigation_gain.csv")
     save_dataframe(summary_tables["weakest_queries"], config.outdir / "table_weakest_queries.csv")
     write_text_report(df, context_df, config.outdir / "results_report.txt")
-    save_excel_workbook(
+    workbook_saved, workbook_message = save_excel_workbook(
         config.outdir / "results_workbook.xlsx",
         summary_df=df,
         query_df=context_df,
@@ -1518,10 +1541,9 @@ def main() -> None:
     )
 
     # Plots similar to the paper
-    if set(config.noise_levels) >= {"low", "medium", "high"} and len(config.noise_levels) >= 3:
-        plot_fidelity_by_noise(df, config.outdir / "figure_fidelity_vs_noise.png")
-        plot_win_probability_by_noise(df, config.outdir / "figure_win_rate_vs_noise.png")
-        plot_contextuality_by_noise(df, config.outdir / "figure_contextuality_vs_noise.png")
+    plot_fidelity_by_noise(df, config.outdir / "figure_fidelity_vs_noise.png")
+    plot_win_probability_by_noise(df, config.outdir / "figure_win_rate_vs_noise.png")
+    plot_contextuality_by_noise(df, config.outdir / "figure_contextuality_vs_noise.png")
     plot_contextuality_vs_fidelity(df, config.outdir / "figure_contextuality_vs_fidelity.png")
     if set(config.mitigation_modes) >= {False, True}:
         plot_pre_post_mitigation(df, config.outdir / "figure_pre_post_mitigation.png")
@@ -1529,6 +1551,7 @@ def main() -> None:
 
     print("\n=== Finished ===")
     print(df_rounded.to_string(index=False))
+    print(workbook_message)
     print(f"\nSaved outputs to: {config.outdir.resolve()}")
 
 
