@@ -1,0 +1,14 @@
+Mermin-Peres Magic-Square Experiment Report
+
+Headline findings
+- Best condition: contextuality-preserving at low noise with mitigated=True, win_probability=0.963447, fidelity=0.953320, contextuality=0.671021
+- Worst condition: baseline at low noise with mitigated=False, win_probability=0.936198, fidelity=0.932411, contextuality=0.425781
+- Mean pre-mitigation win rate: preserving=0.949653, baseline=0.936198
+- Mean post-mitigation win rate: preserving=0.963447, baseline=0.960553
+
+Weakest query pairs overall
+- R2C2 (baseline, noise=low, mitigated=False): win_probability=0.914062, fidelity=0.909644, trace_distance=0.097656
+- R3C3 (baseline, noise=low, mitigated=False): win_probability=0.917969, fidelity=0.913797, trace_distance=0.093750
+- R3C2 (baseline, noise=low, mitigated=False): win_probability=0.917969, fidelity=0.914362, trace_distance=0.089844
+- R3C2 (contextuality-preserving, noise=low, mitigated=False): win_probability=0.925781, fidelity=0.922294, trace_distance=0.089844
+- R2C1 (baseline, noise=low, mitigated=False): win_probability=0.925781, fidelity=0.921347, trace_distance=0.085937

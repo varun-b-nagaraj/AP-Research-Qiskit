@@ -51,6 +51,28 @@ from qiskit_aer.noise import (
     depolarizing_error,
 )
 
+
+def load_simple_dotenv(path: str = ".env") -> None:
+    env_path = Path(path)
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip("'").strip('"'))
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+load_simple_dotenv()
+
 # =========================
 # Configuration
 # =========================
@@ -60,9 +82,9 @@ OUTDIR = Path("mp_contextuality_outputs")
 OUTDIR.mkdir(parents=True, exist_ok=True)
 
 # Backends:
-USE_REAL_BACKEND = False
-USE_BACKEND_MIMIC = False
-IBM_BACKEND_NAME = "ibm_brisbane"
+USE_REAL_BACKEND = env_bool("MP_USE_REAL_BACKEND", False)
+USE_BACKEND_MIMIC = env_bool("MP_USE_BACKEND_MIMIC", False)
+IBM_BACKEND_NAME = os.getenv("MP_BACKEND_NAME", "ibm_brisbane")
 
 # Conservative transpilation to preserve circuit structure
 OPTIMIZATION_LEVEL = 0
@@ -126,6 +148,7 @@ NONCONTEXTUAL_WIN_BOUND = 8.0 / 9.0
 IDEAL_QUANTUM_WIN_RATE = 1.0
 
 DEFAULT_NOISE_LEVEL_ORDER = ["low", "medium", "high"]
+REAL_BACKEND_NOISE_LABEL = "hardware"
 DEFAULT_CIRCUIT_TYPES = ["contextuality-preserving", "baseline"]
 DEFAULT_MITIGATION_MODES = [False, True]
 
@@ -139,6 +162,7 @@ def set_seeds(seed: int) -> None:
     np.random.seed(seed)
 
 
+@lru_cache(maxsize=1)
 def ensure_runtime_service():
     """
     Import IBM Runtime lazily so local Aer runs do not pay the import cost or
@@ -151,13 +175,24 @@ def ensure_runtime_service():
             "qiskit-ibm-runtime is not available. Install/configure it or disable "
             "real-backend options."
         ) from exc
-    return QiskitRuntimeService()
+    token = os.getenv("IBM_QUANTUM_TOKEN")
+    instance = os.getenv("IBM_QUANTUM_INSTANCE")
+    channel = os.getenv("IBM_QUANTUM_CHANNEL", "ibm_quantum_platform")
+
+    kwargs = {"channel": channel}
+    if token:
+        kwargs["token"] = token
+    if instance:
+        kwargs["instance"] = instance
+    return QiskitRuntimeService(**kwargs)
 
 
-def get_reference_backend():
+@lru_cache(maxsize=4)
+def get_reference_backend(backend_name: Optional[str] = None):
     """Optional backend used either directly or to mimic a noise profile."""
     service = ensure_runtime_service()
-    backend = service.backend(IBM_BACKEND_NAME)
+    target_backend = backend_name or IBM_BACKEND_NAME
+    backend = service.backend(target_backend)
     return backend
 
 
@@ -198,7 +233,7 @@ def build_simulator(level: str):
       - a backend-mimicking simulator based on a real IBM backend.
     """
     if USE_BACKEND_MIMIC:
-        backend = get_reference_backend()
+        backend = get_reference_backend(IBM_BACKEND_NAME)
         sim = AerSimulator.from_backend(backend)
         return sim, backend
     else:
@@ -207,6 +242,47 @@ def build_simulator(level: str):
             seed_simulator=SEED,
         )
         return sim, None
+
+
+def run_compiled_circuits(backend, compiled_circuits: List[QuantumCircuit], shots: int) -> List[Dict[str, int]]:
+    """
+    Submit a batch of compiled circuits to a backend and return one counts dict per circuit.
+    """
+    job = backend.run(compiled_circuits, shots=shots)
+    result = job.result()
+    return [result.get_counts(i) for i in range(len(compiled_circuits))]
+
+
+def run_sampler_circuits(backend, compiled_circuits: List[QuantumCircuit], shots: int) -> List[Dict[str, int]]:
+    """
+    Submit a batch of circuits to IBM Runtime SamplerV2 and return one counts dict
+    per circuit. This is the supported interface for real hardware execution.
+    """
+    from qiskit_ibm_runtime import SamplerV2
+
+    sampler = SamplerV2(
+        mode=backend,
+        options={
+            "default_shots": shots,
+            "dynamical_decoupling": {
+                "enable": True,
+                "sequence_type": "XpXm",
+            },
+            "twirling": {
+                "enable_gates": True,
+            },
+        },
+    )
+    job = sampler.run(compiled_circuits, shots=shots)
+    result = job.result()
+
+    counts_list: List[Dict[str, int]] = []
+    for pub_result in result:
+        data_values = list(pub_result.data.values())
+        if not data_values:
+            raise RuntimeError("Sampler result did not contain classical measurement data.")
+        counts_list.append(data_values[0].get_counts())
+    return counts_list
 
 
 def pauli_basis_rotation(qc: QuantumCircuit, qubit: int, pauli: str) -> None:
@@ -739,22 +815,23 @@ def run_family(
     Execute all selected magic-square query pairs for one circuit family / noise level /
     mitigation setting.
     """
-    simulator, ref_backend = build_simulator(noise_level)
-
+    simulator = None
+    ref_backend = None
     backend_name = config.backend_name if config.use_backend_mimic else "local_aer_noise_model"
+    if not config.use_real_backend:
+        simulator, ref_backend = build_simulator(noise_level)
     raw_context_scale_dists: Dict[str, Dict[int, Dict[str, float]]] = {}
 
     # Optional real backend path.
     if config.use_real_backend:
-        backend = get_reference_backend()
+        backend = get_reference_backend(config.backend_name)
         backend_name = backend.name
         context_dists = {}
 
-        # Real backend run without mitigation or with manual ZNE via repeated jobs.
-        for ctx in config.contexts:
-            print(f"[run] circuit={circuit_type} noise={noise_level} mitigated={mitigated} query={ctx}", flush=True)
-            base_meas = build_query_circuit(prep_circuit, ctx, include_measurements=True)
-            if mitigated:
+        if mitigated:
+            folded_jobs: List[Tuple[str, int, QuantumCircuit]] = []
+            for ctx in config.contexts:
+                base_meas = build_query_circuit(prep_circuit, ctx, include_measurements=True)
                 raw_context_scale_dists[ctx] = {}
                 for sf in config.zne_scale_factors:
                     print(
@@ -764,12 +841,18 @@ def run_family(
                     )
                     folded = fold_global(base_meas, sf)
                     compiled = compile_circuit(folded, backend)
-                    job = backend.run(compiled, shots=config.shots)
-                    result = job.result()
-                    counts = result.get_counts()
-                    dist = outcome_distribution_from_counts(counts, config.shots)
-                    raw_context_scale_dists[ctx][sf] = dist
-                outcome_labels = tuple(format(index, "04b") for index in range(16))
+                    folded_jobs.append((ctx, sf, compiled))
+
+            counts_list = run_sampler_circuits(
+                backend,
+                [compiled for _, _, compiled in folded_jobs],
+                shots=config.shots,
+            )
+            for (ctx, sf, _), counts in zip(folded_jobs, counts_list):
+                raw_context_scale_dists[ctx][sf] = outcome_distribution_from_counts(counts, config.shots)
+
+            outcome_labels = tuple(format(index, "04b") for index in range(16))
+            for ctx in config.contexts:
                 extrapolated = {}
                 for label in outcome_labels:
                     extrapolated[label] = max(
@@ -784,11 +867,19 @@ def run_family(
                     context_dists[ctx] = {label: 0.25 for label in outcome_labels}
                 else:
                     context_dists[ctx] = {label: value / s for label, value in extrapolated.items()}
-            else:
-                compiled = compile_circuit(base_meas, backend)
-                job = backend.run(compiled, shots=config.shots)
-                result = job.result()
-                counts = result.get_counts()
+        else:
+            compiled_jobs: List[Tuple[str, QuantumCircuit]] = []
+            for ctx in config.contexts:
+                print(f"[run] circuit={circuit_type} noise={noise_level} mitigated={mitigated} query={ctx}", flush=True)
+                base_meas = build_query_circuit(prep_circuit, ctx, include_measurements=True)
+                compiled_jobs.append((ctx, compile_circuit(base_meas, backend)))
+
+            counts_list = run_sampler_circuits(
+                backend,
+                [compiled for _, compiled in compiled_jobs],
+                shots=config.shots,
+            )
+            for (ctx, _), counts in zip(compiled_jobs, counts_list):
                 context_dists[ctx] = outcome_distribution_from_counts(counts, config.shots)
     else:
         context_dists = {}
@@ -1029,11 +1120,21 @@ def plot_fidelity_by_noise(df: pd.DataFrame, outpath: Path) -> None:
     )
 
     plt.figure(figsize=(7, 5))
-    for col in pivot.columns:
-        plt.plot(pivot.index, pivot[col], marker="o", label=col)
-    plt.title("Mean Fidelity as a Function of Noise Level")
+    x = np.arange(len(pivot.index))
+    width = 0.4
+
+    cols = list(pivot.columns)
+    if len(cols) >= 2:
+        plt.bar(x - width / 2, pivot[cols[0]].values, width=width, label=cols[0])
+        plt.bar(x + width / 2, pivot[cols[1]].values, width=width, label=cols[1])
+    elif len(cols) == 1:
+        plt.bar(x, pivot[cols[0]].values, width=width, label=cols[0])
+
+    plt.xticks(x, pivot.index)
+    plt.title("Figure 1. Mean Fidelity by Circuit Type and Noise Level")
     plt.xlabel("Noise level")
     plt.ylabel("Mean fidelity")
+    plt.ylim(0, 1.0)
     plt.legend()
     plt.tight_layout()
     plt.savefig(outpath, dpi=200)
@@ -1234,7 +1335,13 @@ def parse_args() -> ExperimentConfig:
         args.shots = min(args.shots, 256)
         zne_scale_factors = [1, 3]
 
-    invalid_noise = [v for v in noise_levels if v not in NOISE_LEVELS]
+    if args.use_real_backend and noise_levels == DEFAULT_NOISE_LEVEL_ORDER:
+        noise_levels = [REAL_BACKEND_NOISE_LABEL]
+
+    invalid_noise = [
+        v for v in noise_levels
+        if v not in NOISE_LEVELS and not (args.use_real_backend and v == REAL_BACKEND_NOISE_LABEL)
+    ]
     invalid_circuits = [v for v in circuit_types if v not in DEFAULT_CIRCUIT_TYPES]
     invalid_contexts = [v for v in contexts if v not in QUERY_CONFIGS]
     if invalid_noise:

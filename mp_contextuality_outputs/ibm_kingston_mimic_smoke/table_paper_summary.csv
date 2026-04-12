@@ -1,0 +1,5 @@
+noise_level,circuit_type,mitigated,win_probability,contextuality_violation,fidelity,trace_distance
+low,baseline,False,0.871528,0.0,0.86459,0.150174
+low,contextuality-preserving,False,0.888455,0.0,0.882207,0.13151
+low,baseline,True,0.89623,0.066074,0.879415,0.159645
+low,contextuality-preserving,True,0.89588,0.062918,0.877018,0.161579
