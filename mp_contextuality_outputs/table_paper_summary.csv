@@ -1,0 +1,13 @@
+noise_level,circuit_type,mitigated,win_probability,contextuality_violation,fidelity,trace_distance
+high,baseline,False,0.764703,0.0,0.764596,0.235297
+high,contextuality-preserving,False,0.812893,0.0,0.812779,0.187107
+high,baseline,True,0.868812,0.0,0.868091,0.132343
+high,contextuality-preserving,True,0.891629,0.024658,0.891102,0.108376
+low,baseline,False,0.930895,0.378052,0.930766,0.069105
+low,contextuality-preserving,False,0.94789,0.531006,0.947773,0.052165
+low,baseline,True,0.974817,0.773351,0.974222,0.035083
+low,contextuality-preserving,True,0.97453,0.770774,0.973838,0.03721
+medium,baseline,False,0.865316,0.0,0.865156,0.134684
+medium,contextuality-preserving,False,0.896525,0.068726,0.896382,0.103475
+medium,baseline,True,0.941409,0.47268,0.94061,0.063945
+medium,contextuality-preserving,True,0.943504,0.491532,0.942832,0.061842

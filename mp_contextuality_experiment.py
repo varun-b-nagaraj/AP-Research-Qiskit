@@ -51,15 +51,6 @@ from qiskit_aer.noise import (
     depolarizing_error,
 )
 
-# Optional IBM Runtime imports.
-# Only needed if USE_REAL_BACKEND or USE_BACKEND_MIMIC is enabled.
-try:
-    from qiskit_ibm_runtime import QiskitRuntimeService
-    IBM_RUNTIME_AVAILABLE = True
-except Exception:
-    IBM_RUNTIME_AVAILABLE = False
-
-
 # =========================
 # Configuration
 # =========================
@@ -148,11 +139,18 @@ def set_seeds(seed: int) -> None:
     np.random.seed(seed)
 
 
-def ensure_runtime_service() -> "QiskitRuntimeService":
-    if not IBM_RUNTIME_AVAILABLE:
+def ensure_runtime_service():
+    """
+    Import IBM Runtime lazily so local Aer runs do not pay the import cost or
+    get blocked on optional dependency initialization.
+    """
+    try:
+        from qiskit_ibm_runtime import QiskitRuntimeService
+    except Exception as exc:
         raise RuntimeError(
-            "qiskit-ibm-runtime is not installed. Install it or disable real-backend options."
-        )
+            "qiskit-ibm-runtime is not available. Install/configure it or disable "
+            "real-backend options."
+        ) from exc
     return QiskitRuntimeService()
 
 

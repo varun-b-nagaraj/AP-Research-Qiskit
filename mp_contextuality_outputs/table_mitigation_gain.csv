@@ -1,0 +1,7 @@
+circuit_type,noise_level,gain_win_probability,gain_contextuality,gain_fidelity,gain_trace_distance
+baseline,low,0.043922,0.395299,0.043456,-0.034023
+baseline,medium,0.076093,0.47268,0.075454,-0.070739
+baseline,high,0.104109,0.0,0.103496,-0.102954
+contextuality-preserving,low,0.026641,0.239768,0.026065,-0.014955
+contextuality-preserving,medium,0.046978,0.422806,0.046449,-0.041633
+contextuality-preserving,high,0.078735,0.024658,0.078323,-0.07873
