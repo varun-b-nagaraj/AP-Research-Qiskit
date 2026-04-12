@@ -953,6 +953,33 @@ def save_dataframe(df: pd.DataFrame, path: Path) -> None:
     df.to_csv(path, index=False)
 
 
+def save_excel_workbook(
+    outpath: Path,
+    summary_df: pd.DataFrame,
+    query_df: pd.DataFrame,
+    summary_tables: Dict[str, pd.DataFrame],
+    manifest: Dict,
+) -> None:
+    """
+    Write a single Excel workbook containing the raw outputs and all derived tables.
+    """
+    manifest_df = pd.DataFrame(
+        [{"key": key, "value": json.dumps(value) if isinstance(value, (dict, list)) else value} for key, value in manifest.items()]
+    )
+
+    with pd.ExcelWriter(outpath, engine="openpyxl") as writer:
+        summary_df.to_excel(writer, sheet_name="summary", index=False)
+        query_df.to_excel(writer, sheet_name="queries", index=False)
+        manifest_df.to_excel(writer, sheet_name="manifest", index=False)
+        summary_tables["paper_summary"].to_excel(writer, sheet_name="paper_summary", index=False)
+        summary_tables["fidelity_table"].to_excel(writer, sheet_name="fidelity_by_noise")
+        summary_tables["win_rate_table"].to_excel(writer, sheet_name="win_rate_by_noise")
+        summary_tables["contextuality_table"].to_excel(writer, sheet_name="contextuality_by_noise")
+        summary_tables["preserving_advantage"].to_excel(writer, sheet_name="preserving_advantage", index=False)
+        summary_tables["mitigation_gain"].to_excel(writer, sheet_name="mitigation_gain", index=False)
+        summary_tables["weakest_queries"].to_excel(writer, sheet_name="weakest_queries", index=False)
+
+
 def save_json(payload: Dict, path: Path) -> None:
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, sort_keys=True)
@@ -1482,6 +1509,13 @@ def main() -> None:
     save_dataframe(summary_tables["mitigation_gain"], config.outdir / "table_mitigation_gain.csv")
     save_dataframe(summary_tables["weakest_queries"], config.outdir / "table_weakest_queries.csv")
     write_text_report(df, context_df, config.outdir / "results_report.txt")
+    save_excel_workbook(
+        config.outdir / "results_workbook.xlsx",
+        summary_df=df,
+        query_df=context_df,
+        summary_tables=summary_tables,
+        manifest=execution_manifest,
+    )
 
     # Plots similar to the paper
     if set(config.noise_levels) >= {"low", "medium", "high"} and len(config.noise_levels) >= 3:
