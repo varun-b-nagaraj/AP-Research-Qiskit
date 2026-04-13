@@ -4,10 +4,11 @@ Mermin–Peres contextuality experiment driver
 --------------------------------------------
 
 What this script does:
-- Builds two matched circuit families:
-    1) contextuality-preserving
-    2) baseline (same logical prep, extra structure-breaking/noise-sensitive overhead)
-- Tests them under 3 contextuality-preservation levels: low / medium / high
+- Builds four circuit families:
+    1) contextuality-low
+    2) contextuality-medium
+    3) contextuality-high
+    4) baseline (no preservation)
 - Uses 8192 shots per circuit configuration
 - Computes:
     * fidelity-like overlap with ideal parity distributions
@@ -154,9 +155,11 @@ QUERY_CONFIGS = {
 
 NONCONTEXTUAL_WIN_BOUND = 8.0 / 9.0
 IDEAL_QUANTUM_WIN_RATE = 1.0
+NONCONTEXTUAL_PM_BOUND = 4.0
+IDEAL_PM_VALUE = 6.0
 
 DEFAULT_PRESERVATION_LEVEL_ORDER = ["low", "medium", "high"]
-DEFAULT_CIRCUIT_TYPES = ["contextuality-preserving", "baseline"]
+DEFAULT_CIRCUIT_TYPES = ["contextuality-low", "contextuality-medium", "contextuality-high", "baseline"]
 DEFAULT_MITIGATION_MODES = [False, True]
 
 
@@ -462,6 +465,19 @@ def build_baseline_prep(preservation_level: str = "high") -> QuantumCircuit:
     return qc
 
 
+def build_prep_for_circuit_type(circuit_type: str) -> QuantumCircuit:
+    if circuit_type == "baseline":
+        # Baseline with no preservation: use the heaviest baseline profile.
+        return build_baseline_prep("low")
+    if circuit_type == "contextuality-low":
+        return build_contextuality_preserving_prep("low")
+    if circuit_type == "contextuality-medium":
+        return build_contextuality_preserving_prep("medium")
+    if circuit_type == "contextuality-high":
+        return build_contextuality_preserving_prep("high")
+    raise ValueError(f"Unsupported circuit type: {circuit_type}")
+
+
 def signed_pauli_matrix(label: str) -> np.ndarray:
     sign = -1 if label.startswith("-") else 1
     pauli_label = label[1:] if label.startswith("-") else label
@@ -676,6 +692,46 @@ def normalized_contextuality_score(witness: float) -> float:
     )
 
 
+def normalized_pm_contextuality(witness: float) -> float:
+    return float(
+        np.clip(
+            (witness - NONCONTEXTUAL_PM_BOUND) / (IDEAL_PM_VALUE - NONCONTEXTUAL_PM_BOUND),
+            0.0,
+            1.0,
+        )
+    )
+
+
+def row_col_product_expectations_for_query(
+    query_name: str,
+    outcome_dist: Dict[str, float],
+) -> Tuple[float, float]:
+    row_exp = 0.0
+    col_exp = 0.0
+    for bitstring, prob in outcome_dist.items():
+        row_values, col_values = decode_query_outcome(query_name, bitstring)
+        row_exp += prob * float(np.prod(row_values))
+        col_exp += prob * float(np.prod(col_values))
+    return row_exp, col_exp
+
+
+def pm_witness_from_contexts(
+    context_dists: Dict[str, Dict[str, float]],
+) -> Tuple[float, float, Dict[int, float], Dict[int, float]]:
+    row_exp: Dict[int, List[float]] = {0: [], 1: [], 2: []}
+    col_exp: Dict[int, List[float]] = {0: [], 1: [], 2: []}
+    for ctx, dist in context_dists.items():
+        row_index, col_index = parse_query_name(ctx)
+        row_val, col_val = row_col_product_expectations_for_query(ctx, dist)
+        row_exp[row_index].append(row_val)
+        col_exp[col_index].append(col_val)
+
+    row_means = {idx: float(np.mean(vals)) if vals else 0.0 for idx, vals in row_exp.items()}
+    col_means = {idx: float(np.mean(vals)) if vals else 0.0 for idx, vals in col_exp.items()}
+    witness = (row_means[0] + row_means[1] + row_means[2]) - (col_means[0] + col_means[1] + col_means[2])
+    return witness, normalized_pm_contextuality(witness), row_means, col_means
+
+
 # =========================
 # Execution
 # =========================
@@ -683,7 +739,6 @@ def normalized_contextuality_score(witness: float) -> float:
 @dataclass
 class RunRecord:
     circuit_type: str
-    preservation_level: str
     mitigated: bool
     backend: str
     shots_per_context: int
@@ -691,19 +746,22 @@ class RunRecord:
     fidelity: float
     trace_distance: float
     contextuality_violation: float
+    pm_contextuality: float
+    pm_witness: float
     win_probability: float
 
 
 @dataclass
 class ContextRecord:
     circuit_type: str
-    preservation_level: str
     mitigated: bool
     query_name: str
     shots: int
     row_index: int
     column_index: int
     win_probability: float
+    row_product_expectation: float
+    column_product_expectation: float
     fidelity: float
     trace_distance: float
     success_probability: float
@@ -715,7 +773,6 @@ class ContextRecord:
 class ExperimentConfig:
     shots: int
     zne_scale_factors: List[int]
-    preservation_levels: List[str]
     circuit_types: List[str]
     mitigation_modes: List[bool]
     contexts: List[str]
@@ -752,7 +809,6 @@ def run_single_context(
     simulator,
     shots: int,
     zne_scale_factors: Optional[List[int]] = None,
-    preservation_level: Optional[str] = None,
     mitigated: Optional[bool] = None,
 ) -> Tuple[Dict[str, float], Dict[int, Dict[str, float]]]:
     """
@@ -764,7 +820,7 @@ def run_single_context(
     base_meas = build_query_circuit(prep_circuit, context_name, include_measurements=True)
     raw_outcome_dists: Dict[int, Dict[str, float]] = {}
     progress_prefix = (
-        f"[run] circuit={circuit_type} preservation={preservation_level or 'n/a'} "
+        f"[run] circuit={circuit_type} "
         f"mitigated={mitigated if mitigated is not None else 'n/a'} query={context_name}"
     )
 
@@ -807,7 +863,7 @@ def run_single_context(
 def aggregate_metrics(
     prep_circuit: QuantumCircuit,
     context_dists: Dict[str, Dict[str, float]],
-) -> Tuple[float, float, float, float]:
+) -> Tuple[float, float, float, float, float, float]:
     """
     Aggregate all 9 row/column query pairs into:
       fidelity, trace_distance, normalized_contextuality_violation, mean win rate
@@ -828,18 +884,20 @@ def aggregate_metrics(
 
     witness = witness_from_expectations(context_expectations)
     contextuality = normalized_contextuality_score(witness)
+    pm_witness, pm_contextuality, _, _ = pm_witness_from_contexts(context_dists)
 
     return (
         float(np.mean(fidelities)),
         float(np.mean(trace_distances)),
         contextuality,
         witness,
+        pm_contextuality,
+        pm_witness,
     )
 
 
 def build_context_records(
     circuit_type: str,
-    preservation_level: str,
     mitigated: bool,
     shots: int,
     context_dists: Dict[str, Dict[str, float]],
@@ -851,16 +909,18 @@ def build_context_records(
         ideal = ideal_outcome_distribution(prep_circuit, ctx)
         win_dist = win_distribution_from_outcome_distribution(ctx, dist)
         row_index, col_index = parse_query_name(ctx)
+        row_exp, col_exp = row_col_product_expectations_for_query(ctx, dist)
         records.append(
             ContextRecord(
                 circuit_type=circuit_type,
-                preservation_level=preservation_level,
                 mitigated=mitigated,
                 query_name=ctx,
                 shots=shots,
                 row_index=row_index + 1,
                 column_index=col_index + 1,
                 win_probability=win_dist["win"],
+                row_product_expectation=row_exp,
+                column_product_expectation=col_exp,
                 fidelity=classical_fidelity(dist, ideal, [format(index, "04b") for index in range(16)]),
                 trace_distance=l1_trace_distance(dist, ideal, [format(index, "04b") for index in range(16)]),
                 success_probability=win_dist["win"],
@@ -875,11 +935,10 @@ def run_family(
     config: ExperimentConfig,
     circuit_type: str,
     prep_circuit: QuantumCircuit,
-    preservation_level: str,
     mitigated: bool,
 ) -> Tuple[RunRecord, List[ContextRecord]]:
     """
-    Execute all selected magic-square query pairs for one circuit family / preservation level /
+    Execute all selected magic-square query pairs for one circuit family /
     mitigation setting.
     """
     simulator = None
@@ -902,8 +961,7 @@ def run_family(
                 raw_context_scale_dists[ctx] = {}
                 for sf in config.zne_scale_factors:
                     print(
-                        f"[run] circuit={circuit_type} preservation={preservation_level} "
-                        f"mitigated={mitigated} query={ctx} scale_factor={sf}",
+                        f"[run] circuit={circuit_type} mitigated={mitigated} query={ctx} scale_factor={sf}",
                         flush=True,
                     )
                     folded = fold_global(base_meas, sf)
@@ -938,7 +996,7 @@ def run_family(
             compiled_jobs: List[Tuple[str, QuantumCircuit]] = []
             for ctx in config.contexts:
                 print(
-                    f"[run] circuit={circuit_type} preservation={preservation_level} mitigated={mitigated} query={ctx}",
+                    f"[run] circuit={circuit_type} mitigated={mitigated} query={ctx}",
                     flush=True,
                 )
                 base_meas = build_query_circuit(prep_circuit, ctx, include_measurements=True)
@@ -961,17 +1019,17 @@ def run_family(
                 simulator=simulator,
                 shots=config.shots,
                 zne_scale_factors=config.zne_scale_factors if mitigated else None,
-                preservation_level=preservation_level,
                 mitigated=mitigated,
             )
             context_dists[ctx] = dist
             raw_context_scale_dists[ctx] = raw_dists
 
-    fidelity, trace_distance, contextuality, win_probability = aggregate_metrics(prep_circuit, context_dists)
+    fidelity, trace_distance, contextuality, win_probability, pm_contextuality, pm_witness = aggregate_metrics(
+        prep_circuit, context_dists
+    )
 
     run_record = RunRecord(
         circuit_type=circuit_type,
-        preservation_level=preservation_level,
         mitigated=mitigated,
         backend=backend_name,
         shots_per_context=config.shots,
@@ -979,11 +1037,12 @@ def run_family(
         fidelity=fidelity,
         trace_distance=trace_distance,
         contextuality_violation=contextuality,
+        pm_contextuality=pm_contextuality,
+        pm_witness=pm_witness,
         win_probability=win_probability,
     )
     context_records = build_context_records(
         circuit_type=circuit_type,
-        preservation_level=preservation_level,
         mitigated=mitigated,
         shots=config.shots,
         context_dists=context_dists,
@@ -1032,9 +1091,9 @@ def save_excel_workbook(
         query_df.to_excel(writer, sheet_name="queries", index=False)
         manifest_df.to_excel(writer, sheet_name="manifest", index=False)
         summary_tables["paper_summary"].to_excel(writer, sheet_name="paper_summary", index=False)
-        summary_tables["fidelity_table"].to_excel(writer, sheet_name="fidelity_by_preservation")
-        summary_tables["win_rate_table"].to_excel(writer, sheet_name="win_rate_by_preservation")
-        summary_tables["contextuality_table"].to_excel(writer, sheet_name="contextuality_by_preservation")
+        summary_tables["fidelity_table"].to_excel(writer, sheet_name="fidelity_by_circuit")
+        summary_tables["win_rate_table"].to_excel(writer, sheet_name="win_rate_by_circuit")
+        summary_tables["contextuality_table"].to_excel(writer, sheet_name="contextuality_by_circuit")
         summary_tables["preserving_advantage"].to_excel(writer, sheet_name="preserving_advantage", index=False)
         summary_tables["mitigation_gain"].to_excel(writer, sheet_name="mitigation_gain", index=False)
         summary_tables["weakest_queries"].to_excel(writer, sheet_name="weakest_queries", index=False)
@@ -1055,10 +1114,10 @@ def validate_probability_distributions(context_df: pd.DataFrame) -> None:
         raise ValueError(f"Non-normalized context distributions detected:\n{bad_rows.to_string(index=False)}")
 
 
-def ordered_preservation_levels(values: Iterable[str]) -> List[str]:
+def ordered_circuit_types(values: Iterable[str]) -> List[str]:
     values = list(dict.fromkeys(values))
-    preferred = [level for level in DEFAULT_PRESERVATION_LEVEL_ORDER if level in values]
-    extras = [level for level in values if level not in preferred]
+    preferred = [label for label in DEFAULT_CIRCUIT_TYPES if label in values]
+    extras = [label for label in values if label not in preferred]
     return preferred + extras
 
 
@@ -1068,108 +1127,101 @@ def build_interpretable_summary_tables(
 ) -> Dict[str, pd.DataFrame]:
     summary = summary_df.copy()
     summary["mitigation_label"] = summary["mitigated"].map({False: "pre", True: "post"})
-    summary["circuit_short"] = summary["circuit_type"].replace(
-        {
-            "contextuality-preserving": "preserving",
-            "baseline": "baseline",
-        }
-    )
 
     paper_summary = (
         summary[
             [
-                "preservation_level",
                 "circuit_type",
                 "mitigated",
                 "win_probability",
                 "contextuality_violation",
+                "pm_contextuality",
+                "pm_witness",
                 "fidelity",
                 "trace_distance",
             ]
         ]
-        .sort_values(["preservation_level", "mitigated", "circuit_type"])
+        .sort_values(["mitigated", "circuit_type"])
         .reset_index(drop=True)
     )
 
     fidelity_table = (
         summary.pivot_table(
-            index="preservation_level",
-            columns=["circuit_short", "mitigation_label"],
+            index="circuit_type",
+            columns=["mitigation_label"],
             values="fidelity",
         )
-        .reindex(ordered_preservation_levels(summary["preservation_level"]))
+        .reindex(ordered_circuit_types(summary["circuit_type"]))
         .round(6)
     )
 
     win_rate_table = (
         summary.pivot_table(
-            index="preservation_level",
-            columns=["circuit_short", "mitigation_label"],
+            index="circuit_type",
+            columns=["mitigation_label"],
             values="win_probability",
         )
-        .reindex(ordered_preservation_levels(summary["preservation_level"]))
+        .reindex(ordered_circuit_types(summary["circuit_type"]))
         .round(6)
     )
 
     contextuality_table = (
         summary.pivot_table(
-            index="preservation_level",
-            columns=["circuit_short", "mitigation_label"],
-            values="contextuality_violation",
+            index="circuit_type",
+            columns=["mitigation_label"],
+            values="pm_contextuality",
         )
-        .reindex(ordered_preservation_levels(summary["preservation_level"]))
+        .reindex(ordered_circuit_types(summary["circuit_type"]))
         .round(6)
     )
 
-    preserving_vs_baseline = (
-        summary.pivot_table(
-            index=["preservation_level", "mitigated"],
-            columns="circuit_type",
-            values=["win_probability", "fidelity", "trace_distance", "contextuality_violation"],
-        )
-        .sort_index()
-    )
     delta_rows = []
-    for (preservation_level, mitigated), row in preserving_vs_baseline.iterrows():
-        delta_rows.append(
-            {
-                "preservation_level": preservation_level,
-                "mitigated": mitigated,
-                "delta_win_probability": row[("win_probability", "contextuality-preserving")] - row[("win_probability", "baseline")],
-                "delta_contextuality": row[("contextuality_violation", "contextuality-preserving")] - row[("contextuality_violation", "baseline")],
-                "delta_fidelity": row[("fidelity", "contextuality-preserving")] - row[("fidelity", "baseline")],
-                "delta_trace_distance": row[("trace_distance", "contextuality-preserving")] - row[("trace_distance", "baseline")],
-            }
-        )
+    for mitigated, sub in summary.groupby("mitigated"):
+        baseline_row = sub[sub["circuit_type"] == "baseline"]
+        if baseline_row.empty:
+            continue
+        baseline_metrics = baseline_row.iloc[0]
+        for _, row in sub.iterrows():
+            if row["circuit_type"] == "baseline":
+                continue
+            delta_rows.append(
+                {
+                    "circuit_type": row["circuit_type"],
+                    "mitigated": mitigated,
+                    "delta_win_probability": row["win_probability"] - baseline_metrics["win_probability"],
+                    "delta_contextuality": row["pm_contextuality"] - baseline_metrics["pm_contextuality"],
+                    "delta_fidelity": row["fidelity"] - baseline_metrics["fidelity"],
+                    "delta_trace_distance": row["trace_distance"] - baseline_metrics["trace_distance"],
+                }
+            )
     delta_table = pd.DataFrame(delta_rows).round(6)
 
     mitigation_gain_rows = []
     for circuit_type, sub in summary.groupby("circuit_type"):
-        pre = sub[sub["mitigated"] == False].set_index("preservation_level")
-        post = sub[sub["mitigated"] == True].set_index("preservation_level")
-        shared = pre.index.intersection(post.index)
-        for preservation_level in shared:
-            mitigation_gain_rows.append(
-                {
-                    "circuit_type": circuit_type,
-                    "preservation_level": preservation_level,
-                    "gain_win_probability": post.loc[preservation_level, "win_probability"] - pre.loc[preservation_level, "win_probability"],
-                    "gain_contextuality": post.loc[preservation_level, "contextuality_violation"] - pre.loc[preservation_level, "contextuality_violation"],
-                    "gain_fidelity": post.loc[preservation_level, "fidelity"] - pre.loc[preservation_level, "fidelity"],
-                    "gain_trace_distance": post.loc[preservation_level, "trace_distance"] - pre.loc[preservation_level, "trace_distance"],
-                }
-            )
+        pre = sub[sub["mitigated"] == False]
+        post = sub[sub["mitigated"] == True]
+        if pre.empty or post.empty:
+            continue
+        mitigation_gain_rows.append(
+            {
+                "circuit_type": circuit_type,
+                "gain_win_probability": post["win_probability"].iloc[0] - pre["win_probability"].iloc[0],
+                "gain_contextuality": post["pm_contextuality"].iloc[0] - pre["pm_contextuality"].iloc[0],
+                "gain_fidelity": post["fidelity"].iloc[0] - pre["fidelity"].iloc[0],
+                "gain_trace_distance": post["trace_distance"].iloc[0] - pre["trace_distance"].iloc[0],
+            }
+        )
     mitigation_gain_table = pd.DataFrame(mitigation_gain_rows).round(6)
 
     query = query_df.copy()
     query["mitigation_label"] = query["mitigated"].map({False: "pre", True: "post"})
     query_weakest = (
-        query.sort_values(["preservation_level", "mitigated", "win_probability", "trace_distance"], ascending=[True, True, True, False])
-        .groupby(["preservation_level", "mitigated"])
+        query.sort_values(["circuit_type", "mitigated", "win_probability", "trace_distance"], ascending=[True, True, True, False])
+        .groupby(["circuit_type", "mitigated"])
         .head(3)
         [
             [
-                "preservation_level",
+                "circuit_type",
                 "mitigated",
                 "query_name",
                 "row_index",
@@ -1203,9 +1255,9 @@ def write_text_report(
     worst = summary_df.sort_values(["win_probability", "fidelity"], ascending=[True, True]).iloc[0]
     pre = summary_df[summary_df["mitigated"] == False]
     post = summary_df[summary_df["mitigated"] == True]
-    preserving_pre = pre[pre["circuit_type"] == "contextuality-preserving"]["win_probability"].mean()
+    preserving_pre = pre[pre["circuit_type"].str.startswith("contextuality-")]["win_probability"].mean()
     baseline_pre = pre[pre["circuit_type"] == "baseline"]["win_probability"].mean()
-    preserving_post = post[post["circuit_type"] == "contextuality-preserving"]["win_probability"].mean()
+    preserving_post = post[post["circuit_type"].str.startswith("contextuality-")]["win_probability"].mean()
     baseline_post = post[post["circuit_type"] == "baseline"]["win_probability"].mean()
 
     weakest = query_df.sort_values(["win_probability", "trace_distance"], ascending=[True, False]).head(5)
@@ -1214,8 +1266,8 @@ def write_text_report(
         "Mermin-Peres Magic-Square Experiment Report",
         "",
         "Headline findings",
-        f"- Best condition: {best['circuit_type']} at preservation={best['preservation_level']} with mitigated={best['mitigated']}, win_probability={best['win_probability']:.6f}, fidelity={best['fidelity']:.6f}, contextuality={best['contextuality_violation']:.6f}",
-        f"- Worst condition: {worst['circuit_type']} at preservation={worst['preservation_level']} with mitigated={worst['mitigated']}, win_probability={worst['win_probability']:.6f}, fidelity={worst['fidelity']:.6f}, contextuality={worst['contextuality_violation']:.6f}",
+        f"- Best condition: {best['circuit_type']} with mitigated={best['mitigated']}, win_probability={best['win_probability']:.6f}, fidelity={best['fidelity']:.6f}, pm_contextuality={best['pm_contextuality']:.6f}",
+        f"- Worst condition: {worst['circuit_type']} with mitigated={worst['mitigated']}, win_probability={worst['win_probability']:.6f}, fidelity={worst['fidelity']:.6f}, pm_contextuality={worst['pm_contextuality']:.6f}",
         f"- Mean pre-mitigation win rate: preserving={preserving_pre:.6f}, baseline={baseline_pre:.6f}",
         f"- Mean post-mitigation win rate: preserving={preserving_post:.6f}, baseline={baseline_post:.6f}",
         "",
@@ -1223,56 +1275,39 @@ def write_text_report(
     ]
     for _, row in weakest.iterrows():
         lines.append(
-            f"- {row['query_name']} ({row['circuit_type']}, preservation={row['preservation_level']}, mitigated={row['mitigated']}): "
+            f"- {row['query_name']} ({row['circuit_type']}, mitigated={row['mitigated']}): "
             f"win_probability={row['win_probability']:.6f}, fidelity={row['fidelity']:.6f}, trace_distance={row['trace_distance']:.6f}"
         )
     outpath.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def plot_fidelity_by_preservation(df: pd.DataFrame, outpath: Path) -> None:
-    preservation_order = ordered_preservation_levels(df["preservation_level"].unique())
+def plot_fidelity_by_circuit(df: pd.DataFrame, outpath: Path) -> None:
+    circuit_order = ordered_circuit_types(df["circuit_type"].unique())
     pivot = (
         df[df["mitigated"] == False]
-        .pivot(index="preservation_level", columns="circuit_type", values="fidelity")
-        .reindex(preservation_order)
+        .set_index("circuit_type")
+        .reindex(circuit_order)
     )
 
     plt.figure(figsize=(7, 5))
-    x = np.arange(len(pivot.index))
-    width = 0.4
-
-    cols = list(pivot.columns)
-    if len(cols) >= 2:
-        plt.bar(x - width / 2, pivot[cols[0]].values, width=width, label=cols[0])
-        plt.bar(x + width / 2, pivot[cols[1]].values, width=width, label=cols[1])
-    elif len(cols) == 1:
-        plt.bar(x, pivot[cols[0]].values, width=width, label=cols[0])
-
-    plt.xticks(x, pivot.index)
-    plt.title("Figure 1. Mean Fidelity by Circuit Type and Preservation Level")
-    plt.xlabel("Preservation level")
+    plt.bar(pivot.index, pivot["fidelity"].values, color="#4c78a8")
+    plt.title("Figure 1. Mean Fidelity by Circuit Type")
+    plt.xlabel("Circuit type")
     plt.ylabel("Mean fidelity")
     plt.ylim(0, 1.0)
-    plt.legend()
     plt.tight_layout()
     plt.savefig(outpath, dpi=200)
     plt.close()
 
 
-def plot_win_probability_by_preservation(df: pd.DataFrame, outpath: Path) -> None:
-    preservation_order = ordered_preservation_levels(df["preservation_level"].unique())
-    pivot = (
-        df[df["mitigated"] == False]
-        .pivot(index="preservation_level", columns="circuit_type", values="win_probability")
-        .reindex(preservation_order)
-    )
-
+def plot_win_probability_by_circuit(df: pd.DataFrame, outpath: Path) -> None:
+    circuit_order = ordered_circuit_types(df["circuit_type"].unique())
+    pivot = df[df["mitigated"] == False].set_index("circuit_type").reindex(circuit_order)
     plt.figure(figsize=(7, 5))
-    for col in pivot.columns:
-        plt.plot(pivot.index, pivot[col], marker="o", label=col)
+    plt.bar(pivot.index, pivot["win_probability"].values, color="#72b7b2")
     plt.axhline(NONCONTEXTUAL_WIN_BOUND, color="#444444", linestyle="--", linewidth=1, label="classical bound")
-    plt.title("Magic-Square Win Rate vs Preservation Level")
-    plt.xlabel("Preservation level")
+    plt.title("Magic-Square Win Rate by Circuit Type")
+    plt.xlabel("Circuit type")
     plt.ylabel("Mean win probability")
     plt.legend()
     plt.tight_layout()
@@ -1280,30 +1315,14 @@ def plot_win_probability_by_preservation(df: pd.DataFrame, outpath: Path) -> Non
     plt.close()
 
 
-def plot_contextuality_by_preservation(df: pd.DataFrame, outpath: Path) -> None:
-    preservation_order = ordered_preservation_levels(df["preservation_level"].unique())
-    pivot = (
-        df[df["mitigated"] == False]
-        .pivot(index="preservation_level", columns="circuit_type", values="contextuality_violation")
-        .reindex(preservation_order)
-    )
-
+def plot_contextuality_by_circuit(df: pd.DataFrame, outpath: Path) -> None:
+    circuit_order = ordered_circuit_types(df["circuit_type"].unique())
+    pivot = df[df["mitigated"] == False].set_index("circuit_type").reindex(circuit_order)
     plt.figure(figsize=(7, 5))
-    x = np.arange(len(pivot.index))
-    width = 0.35
-
-    cols = list(pivot.columns)
-    if len(cols) >= 2:
-        plt.bar(x - width / 2, pivot[cols[0]].values, width=width, label=cols[0])
-        plt.bar(x + width / 2, pivot[cols[1]].values, width=width, label=cols[1])
-    else:
-        plt.bar(x, pivot[cols[0]].values, width=width, label=cols[0])
-
-    plt.xticks(x, pivot.index)
-    plt.title("Mean Contextuality Violation by Circuit Type and Preservation Level")
-    plt.xlabel("Preservation level")
-    plt.ylabel("Normalized contextuality violation")
-    plt.legend()
+    plt.bar(pivot.index, pivot["pm_contextuality"].values, color="#f58518")
+    plt.title("Mean Contextuality Violation by Circuit Type")
+    plt.xlabel("Circuit type")
+    plt.ylabel("Normalized PM contextuality")
     plt.tight_layout()
     plt.savefig(outpath, dpi=200)
     plt.close()
@@ -1343,9 +1362,9 @@ def plot_query_heatmaps(query_df: pd.DataFrame, outdir: Path) -> None:
 def plot_contextuality_vs_fidelity(df: pd.DataFrame, outpath: Path) -> None:
     plt.figure(figsize=(7, 5))
     for ct, sub in df.groupby("circuit_type"):
-        plt.scatter(sub["contextuality_violation"], sub["fidelity"], label=ct)
-    plt.title("Contextuality Violation vs Fidelity")
-    plt.xlabel("Normalized contextuality violation")
+        plt.scatter(sub["pm_contextuality"], sub["fidelity"], label=ct)
+    plt.title("PM Contextuality vs Fidelity")
+    plt.xlabel("Normalized PM contextuality")
     plt.ylabel("Fidelity")
     plt.legend()
     plt.tight_layout()
@@ -1415,16 +1434,6 @@ def parse_args() -> ExperimentConfig:
         ),
     )
     parser.add_argument(
-        "--preservation-levels",
-        default=os.getenv("MP_PRESERVATION_LEVELS", os.getenv("MP_NOISE_LEVELS", ",".join(DEFAULT_PRESERVATION_LEVEL_ORDER))),
-    )
-    parser.add_argument(
-        "--noise-levels",
-        dest="preservation_levels_legacy",
-        default=None,
-        help="Legacy alias for --preservation-levels.",
-    )
-    parser.add_argument(
         "--circuit-types",
         default=os.getenv("MP_CIRCUIT_TYPES", ",".join(DEFAULT_CIRCUIT_TYPES)),
     )
@@ -1448,25 +1457,16 @@ def parse_args() -> ExperimentConfig:
     args = parser.parse_args()
 
     zne_scale_factors = [int(v.strip()) for v in args.zne_scale_factors.split(",") if v.strip()]
-    raw_preservation_levels = args.preservation_levels_legacy or args.preservation_levels
-    preservation_levels = [v.strip() for v in raw_preservation_levels.split(",") if v.strip()]
     circuit_types = [v.strip() for v in args.circuit_types.split(",") if v.strip()]
     contexts = [v.strip() for v in args.contexts.split(",") if v.strip()]
     mitigation_modes = parse_bool_csv(args.mitigation_modes)
 
     if args.smoke_test:
-        if not preservation_levels:
-            preservation_levels = ["low"]
-        else:
-            preservation_levels = [preservation_levels[0]]
         args.shots = min(args.shots, 256)
         zne_scale_factors = [1, 3]
 
-    invalid_preservation = [v for v in preservation_levels if v not in PRESERVATION_LEVELS]
     invalid_circuits = [v for v in circuit_types if v not in DEFAULT_CIRCUIT_TYPES]
     invalid_contexts = [v for v in contexts if v not in QUERY_CONFIGS]
-    if invalid_preservation:
-        raise ValueError(f"Unsupported preservation levels: {invalid_preservation}")
     if invalid_circuits:
         raise ValueError(f"Unsupported circuit types: {invalid_circuits}")
     if invalid_contexts:
@@ -1482,7 +1482,6 @@ def parse_args() -> ExperimentConfig:
     return ExperimentConfig(
         shots=args.shots,
         zne_scale_factors=zne_scale_factors,
-        preservation_levels=preservation_levels,
         circuit_types=circuit_types,
         mitigation_modes=mitigation_modes,
         contexts=contexts,
@@ -1503,13 +1502,10 @@ def main() -> None:
         flush=True,
     )
 
-    records: List[RunRecord] = []
-    context_records: List[ContextRecord] = []
     execution_manifest = {
         "seed": SEED,
         "shots": config.shots,
         "zne_scale_factors": config.zne_scale_factors,
-        "preservation_levels": config.preservation_levels,
         "local_simulation_noise": LOCAL_SIMULATION_NOISE,
         "circuit_types": config.circuit_types,
         "mitigation_modes": config.mitigation_modes,
@@ -1522,36 +1518,32 @@ def main() -> None:
     }
     save_json(execution_manifest, config.outdir / "run_manifest.json")
 
-    total_runs = len(config.preservation_levels) * len(config.mitigation_modes) * len(config.circuit_types)
+    records: List[RunRecord] = []
+    context_records: List[ContextRecord] = []
+    total_runs = len(config.mitigation_modes) * len(config.circuit_types)
     current_run = 0
-    for preservation_level in config.preservation_levels:
-        for mitigated in config.mitigation_modes:
-            for circuit_type in config.circuit_types:
-                current_run += 1
-                if circuit_type == "contextuality-preserving":
-                    prep_circuit = build_contextuality_preserving_prep(preservation_level)
-                else:
-                    prep_circuit = build_baseline_prep(preservation_level)
-                prep_circuit.name = circuit_type
-                print(
-                    f"[batch] {current_run}/{total_runs} circuit={circuit_type} "
-                    f"preservation={preservation_level} mitigated={mitigated}",
-                    flush=True,
-                )
-                record, per_context = run_family(
-                    config=config,
-                    circuit_type=circuit_type,
-                    prep_circuit=prep_circuit,
-                    preservation_level=preservation_level,
-                    mitigated=mitigated,
-                )
-                records.append(record)
-                context_records.extend(per_context)
+    for mitigated in config.mitigation_modes:
+        for circuit_type in config.circuit_types:
+            current_run += 1
+            prep_circuit = build_prep_for_circuit_type(circuit_type)
+            prep_circuit.name = circuit_type
+            print(
+                f"[batch] {current_run}/{total_runs} circuit={circuit_type} mitigated={mitigated}",
+                flush=True,
+            )
+            record, per_context = run_family(
+                config=config,
+                circuit_type=circuit_type,
+                prep_circuit=prep_circuit,
+                mitigated=mitigated,
+            )
+            records.append(record)
+            context_records.extend(per_context)
 
-                partial_summary = pd.DataFrame([asdict(r) for r in records])
-                save_dataframe(partial_summary, config.outdir / "summary_results.partial.csv")
-                partial_context = pd.DataFrame([asdict(r) for r in context_records])
-                save_dataframe(partial_context, config.outdir / "context_results.partial.csv")
+            partial_summary = pd.DataFrame([asdict(r) for r in records])
+            save_dataframe(partial_summary, config.outdir / "summary_results.partial.csv")
+            partial_context = pd.DataFrame([asdict(r) for r in context_records])
+            save_dataframe(partial_context, config.outdir / "context_results.partial.csv")
 
     df = pd.DataFrame([asdict(r) for r in records])
     context_df = pd.DataFrame([asdict(r) for r in context_records])
@@ -1569,9 +1561,9 @@ def main() -> None:
 
     summary_tables = build_interpretable_summary_tables(df, context_df)
     save_dataframe(summary_tables["paper_summary"], config.outdir / "table_paper_summary.csv")
-    summary_tables["fidelity_table"].to_csv(config.outdir / "table_fidelity_by_preservation_level.csv")
-    summary_tables["win_rate_table"].to_csv(config.outdir / "table_win_rate_by_preservation_level.csv")
-    summary_tables["contextuality_table"].to_csv(config.outdir / "table_contextuality_by_preservation_level.csv")
+    summary_tables["fidelity_table"].to_csv(config.outdir / "table_fidelity_by_circuit_type.csv")
+    summary_tables["win_rate_table"].to_csv(config.outdir / "table_win_rate_by_circuit_type.csv")
+    summary_tables["contextuality_table"].to_csv(config.outdir / "table_contextuality_by_circuit_type.csv")
     summary_tables["fidelity_table"].to_csv(config.outdir / "table_fidelity_by_noise.csv")
     summary_tables["win_rate_table"].to_csv(config.outdir / "table_win_rate_by_noise.csv")
     summary_tables["contextuality_table"].to_csv(config.outdir / "table_contextuality_by_noise.csv")
@@ -1588,12 +1580,12 @@ def main() -> None:
     )
 
     # Plots similar to the paper
-    plot_fidelity_by_preservation(df, config.outdir / "figure_fidelity_vs_preservation_level.png")
-    plot_win_probability_by_preservation(df, config.outdir / "figure_win_rate_vs_preservation_level.png")
-    plot_contextuality_by_preservation(df, config.outdir / "figure_contextuality_vs_preservation_level.png")
-    plot_fidelity_by_preservation(df, config.outdir / "figure_fidelity_vs_noise.png")
-    plot_win_probability_by_preservation(df, config.outdir / "figure_win_rate_vs_noise.png")
-    plot_contextuality_by_preservation(df, config.outdir / "figure_contextuality_vs_noise.png")
+    plot_fidelity_by_circuit(df, config.outdir / "figure_fidelity_by_circuit_type.png")
+    plot_win_probability_by_circuit(df, config.outdir / "figure_win_rate_by_circuit_type.png")
+    plot_contextuality_by_circuit(df, config.outdir / "figure_contextuality_by_circuit_type.png")
+    plot_fidelity_by_circuit(df, config.outdir / "figure_fidelity_vs_noise.png")
+    plot_win_probability_by_circuit(df, config.outdir / "figure_win_rate_vs_noise.png")
+    plot_contextuality_by_circuit(df, config.outdir / "figure_contextuality_vs_noise.png")
     plot_contextuality_vs_fidelity(df, config.outdir / "figure_contextuality_vs_fidelity.png")
     if set(config.mitigation_modes) >= {False, True}:
         plot_pre_post_mitigation(df, config.outdir / "figure_pre_post_mitigation.png")

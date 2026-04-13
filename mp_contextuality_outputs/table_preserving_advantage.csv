@@ -1,3 +1,7 @@
-noise_level,mitigated,delta_win_probability,delta_contextuality,delta_fidelity,delta_trace_distance
-hardware,False,0.019843,0.0,0.019886,-0.019843
-hardware,True,0.012092,0.038943,0.011957,-0.009168
+preservation_level,mitigated,delta_win_probability,delta_contextuality,delta_fidelity,delta_trace_distance
+high,False,0.023777,0.0,0.023871,-0.023777
+high,True,0.037032,0.000711,0.036946,-0.035465
+low,False,0.028605,0.0,0.028515,-0.028605
+low,True,0.002664,0.0,0.002837,-0.00185
+medium,False,0.051378,0.0,0.051503,-0.051378
+medium,True,0.014645,0.013229,0.01492,-0.016907

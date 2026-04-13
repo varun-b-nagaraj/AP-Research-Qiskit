@@ -1,3 +1,7 @@
-circuit_type,noise_level,gain_win_probability,gain_contextuality,gain_fidelity,gain_trace_distance
-baseline,hardware,0.088847,0.0,0.088,-0.087436
-contextuality-preserving,hardware,0.081096,0.038943,0.080071,-0.076761
+circuit_type,preservation_level,gain_win_probability,gain_contextuality,gain_fidelity,gain_trace_distance
+baseline,low,0.123133,0.0,0.12181,-0.121133
+baseline,medium,0.119447,0.0,0.118642,-0.115631
+baseline,high,0.071933,0.0,0.07109,-0.070292
+contextuality-preserving,low,0.097192,0.0,0.096133,-0.094378
+contextuality-preserving,medium,0.082715,0.013229,0.082058,-0.08116
+contextuality-preserving,high,0.085189,0.000711,0.084166,-0.081981
