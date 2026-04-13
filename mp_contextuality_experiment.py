@@ -7,7 +7,7 @@ What this script does:
 - Builds two matched circuit families:
     1) contextuality-preserving
     2) baseline (same logical prep, extra structure-breaking/noise-sensitive overhead)
-- Tests them under 3 noise levels: low / medium / high
+- Tests them under 3 contextuality-preservation levels: low / medium / high
 - Uses 8192 shots per circuit configuration
 - Computes:
     * fidelity-like overlap with ideal parity distributions
@@ -95,25 +95,33 @@ DEFAULT_SHOTS = 8192
 # ZNE noise scale factors (odd integers are standard for folding)
 DEFAULT_ZNE_SCALE_FACTORS = [1, 3, 5]
 
-# Noise levels for fully local runs if not mimicking a backend
-NOISE_LEVELS = {
-    "low": {
-        "single_qubit_depol": 0.001,
-        "two_qubit_depol": 0.010,
-        "readout_p01": 0.010,
-        "readout_p10": 0.010,
+# Fixed local simulator noise model. The varied condition is preservation strength,
+# not the backend noise strength.
+LOCAL_SIMULATION_NOISE = {
+    "single_qubit_depol": 0.003,
+    "two_qubit_depol": 0.020,
+    "readout_p01": 0.020,
+    "readout_p10": 0.020,
+}
+
+PRESERVATION_LEVELS = {
+    "high": {
+        "preserving_single_qubit_echo_layers": 0,
+        "preserving_two_qubit_echo_layers": 0,
+        "baseline_single_qubit_echo_layers": 1,
+        "baseline_two_qubit_echo_layers": 1,
     },
     "medium": {
-        "single_qubit_depol": 0.003,
-        "two_qubit_depol": 0.020,
-        "readout_p01": 0.020,
-        "readout_p10": 0.020,
+        "preserving_single_qubit_echo_layers": 1,
+        "preserving_two_qubit_echo_layers": 0,
+        "baseline_single_qubit_echo_layers": 2,
+        "baseline_two_qubit_echo_layers": 1,
     },
-    "high": {
-        "single_qubit_depol": 0.006,
-        "two_qubit_depol": 0.040,
-        "readout_p01": 0.040,
-        "readout_p10": 0.040,
+    "low": {
+        "preserving_single_qubit_echo_layers": 2,
+        "preserving_two_qubit_echo_layers": 1,
+        "baseline_single_qubit_echo_layers": 3,
+        "baseline_two_qubit_echo_layers": 2,
     },
 }
 
@@ -147,8 +155,7 @@ QUERY_CONFIGS = {
 NONCONTEXTUAL_WIN_BOUND = 8.0 / 9.0
 IDEAL_QUANTUM_WIN_RATE = 1.0
 
-DEFAULT_NOISE_LEVEL_ORDER = ["low", "medium", "high"]
-REAL_BACKEND_NOISE_LABEL = "hardware"
+DEFAULT_PRESERVATION_LEVEL_ORDER = ["low", "medium", "high"]
 DEFAULT_CIRCUIT_TYPES = ["contextuality-preserving", "baseline"]
 DEFAULT_MITIGATION_MODES = [False, True]
 
@@ -217,8 +224,8 @@ def get_reference_backend(backend_name: Optional[str] = None):
     return backend
 
 
-def build_local_noise_model(level: str) -> NoiseModel:
-    params = NOISE_LEVELS[level]
+def build_local_noise_model() -> NoiseModel:
+    params = LOCAL_SIMULATION_NOISE
     noise_model = NoiseModel()
 
     err_1q = depolarizing_error(params["single_qubit_depol"], 1)
@@ -247,7 +254,7 @@ def build_local_noise_model(level: str) -> NoiseModel:
     return noise_model
 
 
-def build_simulator(level: str):
+def build_simulator():
     """
     Build either:
       - a local synthetic-noise simulator, or
@@ -259,7 +266,7 @@ def build_simulator(level: str):
         return sim, backend
     else:
         sim = AerSimulator(
-            noise_model=build_local_noise_model(level),
+            noise_model=build_local_noise_model(),
             seed_simulator=SEED,
         )
         return sim, None
@@ -378,17 +385,49 @@ def build_base_state_circuit() -> QuantumCircuit:
     return qc
 
 
-def build_contextuality_preserving_prep() -> QuantumCircuit:
+def apply_identity_sensitive_overhead(
+    qc: QuantumCircuit,
+    single_qubit_echo_layers: int,
+    two_qubit_echo_layers: int,
+) -> None:
+    for _ in range(single_qubit_echo_layers):
+        qc.barrier()
+        for qubit in range(4):
+            qc.s(qubit)
+            qc.sdg(qubit)
+        qc.h(0)
+        qc.h(0)
+        qc.h(1)
+        qc.h(1)
+        qc.x(2)
+        qc.x(2)
+        qc.x(3)
+        qc.x(3)
+
+    for _ in range(two_qubit_echo_layers):
+        qc.barrier()
+        qc.cx(0, 2)
+        qc.cx(0, 2)
+        qc.cx(1, 3)
+        qc.cx(1, 3)
+
+
+def build_contextuality_preserving_prep(preservation_level: str = "high") -> QuantumCircuit:
     """
     Low-depth circuit intended to preserve contextual correlations by avoiding
     unnecessary overhead before measurement contexts are applied.
     """
     qc = build_base_state_circuit()
-    # Keep it minimal by design.
+    profile = PRESERVATION_LEVELS[preservation_level]
+    apply_identity_sensitive_overhead(
+        qc,
+        single_qubit_echo_layers=profile["preserving_single_qubit_echo_layers"],
+        two_qubit_echo_layers=profile["preserving_two_qubit_echo_layers"],
+    )
     return qc
 
 
-def build_baseline_prep() -> QuantumCircuit:
+def build_baseline_prep(preservation_level: str = "high") -> QuantumCircuit:
     """
     Baseline matched circuit:
     - same logical state intent
@@ -396,6 +435,7 @@ def build_baseline_prep() -> QuantumCircuit:
     - more vulnerable to noise after transpilation
     """
     qc = build_base_state_circuit()
+    profile = PRESERVATION_LEVELS[preservation_level]
 
     # Identity-equivalent overhead that increases exposure to noise without
     # changing the ideal state.
@@ -413,6 +453,11 @@ def build_baseline_prep() -> QuantumCircuit:
     qc.cx(1, 3)
     qc.cx(1, 3)
     qc.barrier()
+    apply_identity_sensitive_overhead(
+        qc,
+        single_qubit_echo_layers=profile["baseline_single_qubit_echo_layers"],
+        two_qubit_echo_layers=profile["baseline_two_qubit_echo_layers"],
+    )
 
     return qc
 
@@ -638,7 +683,7 @@ def normalized_contextuality_score(witness: float) -> float:
 @dataclass
 class RunRecord:
     circuit_type: str
-    noise_level: str
+    preservation_level: str
     mitigated: bool
     backend: str
     shots_per_context: int
@@ -652,7 +697,7 @@ class RunRecord:
 @dataclass
 class ContextRecord:
     circuit_type: str
-    noise_level: str
+    preservation_level: str
     mitigated: bool
     query_name: str
     shots: int
@@ -670,7 +715,7 @@ class ContextRecord:
 class ExperimentConfig:
     shots: int
     zne_scale_factors: List[int]
-    noise_levels: List[str]
+    preservation_levels: List[str]
     circuit_types: List[str]
     mitigation_modes: List[bool]
     contexts: List[str]
@@ -707,7 +752,7 @@ def run_single_context(
     simulator,
     shots: int,
     zne_scale_factors: Optional[List[int]] = None,
-    noise_level: Optional[str] = None,
+    preservation_level: Optional[str] = None,
     mitigated: Optional[bool] = None,
 ) -> Tuple[Dict[str, float], Dict[int, Dict[str, float]]]:
     """
@@ -719,7 +764,7 @@ def run_single_context(
     base_meas = build_query_circuit(prep_circuit, context_name, include_measurements=True)
     raw_outcome_dists: Dict[int, Dict[str, float]] = {}
     progress_prefix = (
-        f"[run] circuit={circuit_type} noise={noise_level or 'n/a'} "
+        f"[run] circuit={circuit_type} preservation={preservation_level or 'n/a'} "
         f"mitigated={mitigated if mitigated is not None else 'n/a'} query={context_name}"
     )
 
@@ -794,7 +839,7 @@ def aggregate_metrics(
 
 def build_context_records(
     circuit_type: str,
-    noise_level: str,
+    preservation_level: str,
     mitigated: bool,
     shots: int,
     context_dists: Dict[str, Dict[str, float]],
@@ -809,7 +854,7 @@ def build_context_records(
         records.append(
             ContextRecord(
                 circuit_type=circuit_type,
-                noise_level=noise_level,
+                preservation_level=preservation_level,
                 mitigated=mitigated,
                 query_name=ctx,
                 shots=shots,
@@ -830,18 +875,18 @@ def run_family(
     config: ExperimentConfig,
     circuit_type: str,
     prep_circuit: QuantumCircuit,
-    noise_level: str,
+    preservation_level: str,
     mitigated: bool,
 ) -> Tuple[RunRecord, List[ContextRecord]]:
     """
-    Execute all selected magic-square query pairs for one circuit family / noise level /
+    Execute all selected magic-square query pairs for one circuit family / preservation level /
     mitigation setting.
     """
     simulator = None
     ref_backend = None
     backend_name = config.backend_name if config.use_backend_mimic else "local_aer_noise_model"
     if not config.use_real_backend:
-        simulator, ref_backend = build_simulator(noise_level)
+        simulator, ref_backend = build_simulator()
     raw_context_scale_dists: Dict[str, Dict[int, Dict[str, float]]] = {}
 
     # Optional real backend path.
@@ -857,8 +902,8 @@ def run_family(
                 raw_context_scale_dists[ctx] = {}
                 for sf in config.zne_scale_factors:
                     print(
-                        f"[run] circuit={circuit_type} noise={noise_level} mitigated={mitigated} "
-                        f"query={ctx} scale_factor={sf}",
+                        f"[run] circuit={circuit_type} preservation={preservation_level} "
+                        f"mitigated={mitigated} query={ctx} scale_factor={sf}",
                         flush=True,
                     )
                     folded = fold_global(base_meas, sf)
@@ -892,7 +937,10 @@ def run_family(
         else:
             compiled_jobs: List[Tuple[str, QuantumCircuit]] = []
             for ctx in config.contexts:
-                print(f"[run] circuit={circuit_type} noise={noise_level} mitigated={mitigated} query={ctx}", flush=True)
+                print(
+                    f"[run] circuit={circuit_type} preservation={preservation_level} mitigated={mitigated} query={ctx}",
+                    flush=True,
+                )
                 base_meas = build_query_circuit(prep_circuit, ctx, include_measurements=True)
                 compiled_jobs.append((ctx, compile_circuit(base_meas, backend)))
 
@@ -913,7 +961,7 @@ def run_family(
                 simulator=simulator,
                 shots=config.shots,
                 zne_scale_factors=config.zne_scale_factors if mitigated else None,
-                noise_level=noise_level,
+                preservation_level=preservation_level,
                 mitigated=mitigated,
             )
             context_dists[ctx] = dist
@@ -923,7 +971,7 @@ def run_family(
 
     run_record = RunRecord(
         circuit_type=circuit_type,
-        noise_level=noise_level,
+        preservation_level=preservation_level,
         mitigated=mitigated,
         backend=backend_name,
         shots_per_context=config.shots,
@@ -935,7 +983,7 @@ def run_family(
     )
     context_records = build_context_records(
         circuit_type=circuit_type,
-        noise_level=noise_level,
+        preservation_level=preservation_level,
         mitigated=mitigated,
         shots=config.shots,
         context_dists=context_dists,
@@ -984,9 +1032,9 @@ def save_excel_workbook(
         query_df.to_excel(writer, sheet_name="queries", index=False)
         manifest_df.to_excel(writer, sheet_name="manifest", index=False)
         summary_tables["paper_summary"].to_excel(writer, sheet_name="paper_summary", index=False)
-        summary_tables["fidelity_table"].to_excel(writer, sheet_name="fidelity_by_noise")
-        summary_tables["win_rate_table"].to_excel(writer, sheet_name="win_rate_by_noise")
-        summary_tables["contextuality_table"].to_excel(writer, sheet_name="contextuality_by_noise")
+        summary_tables["fidelity_table"].to_excel(writer, sheet_name="fidelity_by_preservation")
+        summary_tables["win_rate_table"].to_excel(writer, sheet_name="win_rate_by_preservation")
+        summary_tables["contextuality_table"].to_excel(writer, sheet_name="contextuality_by_preservation")
         summary_tables["preserving_advantage"].to_excel(writer, sheet_name="preserving_advantage", index=False)
         summary_tables["mitigation_gain"].to_excel(writer, sheet_name="mitigation_gain", index=False)
         summary_tables["weakest_queries"].to_excel(writer, sheet_name="weakest_queries", index=False)
@@ -1007,9 +1055,9 @@ def validate_probability_distributions(context_df: pd.DataFrame) -> None:
         raise ValueError(f"Non-normalized context distributions detected:\n{bad_rows.to_string(index=False)}")
 
 
-def ordered_noise_levels(values: Iterable[str]) -> List[str]:
+def ordered_preservation_levels(values: Iterable[str]) -> List[str]:
     values = list(dict.fromkeys(values))
-    preferred = [level for level in DEFAULT_NOISE_LEVEL_ORDER if level in values]
+    preferred = [level for level in DEFAULT_PRESERVATION_LEVEL_ORDER if level in values]
     extras = [level for level in values if level not in preferred]
     return preferred + extras
 
@@ -1030,7 +1078,7 @@ def build_interpretable_summary_tables(
     paper_summary = (
         summary[
             [
-                "noise_level",
+                "preservation_level",
                 "circuit_type",
                 "mitigated",
                 "win_probability",
@@ -1039,53 +1087,53 @@ def build_interpretable_summary_tables(
                 "trace_distance",
             ]
         ]
-        .sort_values(["noise_level", "mitigated", "circuit_type"])
+        .sort_values(["preservation_level", "mitigated", "circuit_type"])
         .reset_index(drop=True)
     )
 
     fidelity_table = (
         summary.pivot_table(
-            index="noise_level",
+            index="preservation_level",
             columns=["circuit_short", "mitigation_label"],
             values="fidelity",
         )
-        .reindex(ordered_noise_levels(summary["noise_level"]))
+        .reindex(ordered_preservation_levels(summary["preservation_level"]))
         .round(6)
     )
 
     win_rate_table = (
         summary.pivot_table(
-            index="noise_level",
+            index="preservation_level",
             columns=["circuit_short", "mitigation_label"],
             values="win_probability",
         )
-        .reindex(ordered_noise_levels(summary["noise_level"]))
+        .reindex(ordered_preservation_levels(summary["preservation_level"]))
         .round(6)
     )
 
     contextuality_table = (
         summary.pivot_table(
-            index="noise_level",
+            index="preservation_level",
             columns=["circuit_short", "mitigation_label"],
             values="contextuality_violation",
         )
-        .reindex(ordered_noise_levels(summary["noise_level"]))
+        .reindex(ordered_preservation_levels(summary["preservation_level"]))
         .round(6)
     )
 
     preserving_vs_baseline = (
         summary.pivot_table(
-            index=["noise_level", "mitigated"],
+            index=["preservation_level", "mitigated"],
             columns="circuit_type",
             values=["win_probability", "fidelity", "trace_distance", "contextuality_violation"],
         )
         .sort_index()
     )
     delta_rows = []
-    for (noise_level, mitigated), row in preserving_vs_baseline.iterrows():
+    for (preservation_level, mitigated), row in preserving_vs_baseline.iterrows():
         delta_rows.append(
             {
-                "noise_level": noise_level,
+                "preservation_level": preservation_level,
                 "mitigated": mitigated,
                 "delta_win_probability": row[("win_probability", "contextuality-preserving")] - row[("win_probability", "baseline")],
                 "delta_contextuality": row[("contextuality_violation", "contextuality-preserving")] - row[("contextuality_violation", "baseline")],
@@ -1097,18 +1145,18 @@ def build_interpretable_summary_tables(
 
     mitigation_gain_rows = []
     for circuit_type, sub in summary.groupby("circuit_type"):
-        pre = sub[sub["mitigated"] == False].set_index("noise_level")
-        post = sub[sub["mitigated"] == True].set_index("noise_level")
+        pre = sub[sub["mitigated"] == False].set_index("preservation_level")
+        post = sub[sub["mitigated"] == True].set_index("preservation_level")
         shared = pre.index.intersection(post.index)
-        for noise_level in shared:
+        for preservation_level in shared:
             mitigation_gain_rows.append(
                 {
                     "circuit_type": circuit_type,
-                    "noise_level": noise_level,
-                    "gain_win_probability": post.loc[noise_level, "win_probability"] - pre.loc[noise_level, "win_probability"],
-                    "gain_contextuality": post.loc[noise_level, "contextuality_violation"] - pre.loc[noise_level, "contextuality_violation"],
-                    "gain_fidelity": post.loc[noise_level, "fidelity"] - pre.loc[noise_level, "fidelity"],
-                    "gain_trace_distance": post.loc[noise_level, "trace_distance"] - pre.loc[noise_level, "trace_distance"],
+                    "preservation_level": preservation_level,
+                    "gain_win_probability": post.loc[preservation_level, "win_probability"] - pre.loc[preservation_level, "win_probability"],
+                    "gain_contextuality": post.loc[preservation_level, "contextuality_violation"] - pre.loc[preservation_level, "contextuality_violation"],
+                    "gain_fidelity": post.loc[preservation_level, "fidelity"] - pre.loc[preservation_level, "fidelity"],
+                    "gain_trace_distance": post.loc[preservation_level, "trace_distance"] - pre.loc[preservation_level, "trace_distance"],
                 }
             )
     mitigation_gain_table = pd.DataFrame(mitigation_gain_rows).round(6)
@@ -1116,12 +1164,12 @@ def build_interpretable_summary_tables(
     query = query_df.copy()
     query["mitigation_label"] = query["mitigated"].map({False: "pre", True: "post"})
     query_weakest = (
-        query.sort_values(["noise_level", "mitigated", "win_probability", "trace_distance"], ascending=[True, True, True, False])
-        .groupby(["noise_level", "mitigated"])
+        query.sort_values(["preservation_level", "mitigated", "win_probability", "trace_distance"], ascending=[True, True, True, False])
+        .groupby(["preservation_level", "mitigated"])
         .head(3)
         [
             [
-                "noise_level",
+                "preservation_level",
                 "mitigated",
                 "query_name",
                 "row_index",
@@ -1166,8 +1214,8 @@ def write_text_report(
         "Mermin-Peres Magic-Square Experiment Report",
         "",
         "Headline findings",
-        f"- Best condition: {best['circuit_type']} at {best['noise_level']} noise with mitigated={best['mitigated']}, win_probability={best['win_probability']:.6f}, fidelity={best['fidelity']:.6f}, contextuality={best['contextuality_violation']:.6f}",
-        f"- Worst condition: {worst['circuit_type']} at {worst['noise_level']} noise with mitigated={worst['mitigated']}, win_probability={worst['win_probability']:.6f}, fidelity={worst['fidelity']:.6f}, contextuality={worst['contextuality_violation']:.6f}",
+        f"- Best condition: {best['circuit_type']} at preservation={best['preservation_level']} with mitigated={best['mitigated']}, win_probability={best['win_probability']:.6f}, fidelity={best['fidelity']:.6f}, contextuality={best['contextuality_violation']:.6f}",
+        f"- Worst condition: {worst['circuit_type']} at preservation={worst['preservation_level']} with mitigated={worst['mitigated']}, win_probability={worst['win_probability']:.6f}, fidelity={worst['fidelity']:.6f}, contextuality={worst['contextuality_violation']:.6f}",
         f"- Mean pre-mitigation win rate: preserving={preserving_pre:.6f}, baseline={baseline_pre:.6f}",
         f"- Mean post-mitigation win rate: preserving={preserving_post:.6f}, baseline={baseline_post:.6f}",
         "",
@@ -1175,18 +1223,18 @@ def write_text_report(
     ]
     for _, row in weakest.iterrows():
         lines.append(
-            f"- {row['query_name']} ({row['circuit_type']}, noise={row['noise_level']}, mitigated={row['mitigated']}): "
+            f"- {row['query_name']} ({row['circuit_type']}, preservation={row['preservation_level']}, mitigated={row['mitigated']}): "
             f"win_probability={row['win_probability']:.6f}, fidelity={row['fidelity']:.6f}, trace_distance={row['trace_distance']:.6f}"
         )
     outpath.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def plot_fidelity_by_noise(df: pd.DataFrame, outpath: Path) -> None:
-    noise_order = ordered_noise_levels(df["noise_level"].unique())
+def plot_fidelity_by_preservation(df: pd.DataFrame, outpath: Path) -> None:
+    preservation_order = ordered_preservation_levels(df["preservation_level"].unique())
     pivot = (
         df[df["mitigated"] == False]
-        .pivot(index="noise_level", columns="circuit_type", values="fidelity")
-        .reindex(noise_order)
+        .pivot(index="preservation_level", columns="circuit_type", values="fidelity")
+        .reindex(preservation_order)
     )
 
     plt.figure(figsize=(7, 5))
@@ -1201,8 +1249,8 @@ def plot_fidelity_by_noise(df: pd.DataFrame, outpath: Path) -> None:
         plt.bar(x, pivot[cols[0]].values, width=width, label=cols[0])
 
     plt.xticks(x, pivot.index)
-    plt.title("Figure 1. Mean Fidelity by Circuit Type and Noise Level")
-    plt.xlabel("Noise level")
+    plt.title("Figure 1. Mean Fidelity by Circuit Type and Preservation Level")
+    plt.xlabel("Preservation level")
     plt.ylabel("Mean fidelity")
     plt.ylim(0, 1.0)
     plt.legend()
@@ -1211,20 +1259,20 @@ def plot_fidelity_by_noise(df: pd.DataFrame, outpath: Path) -> None:
     plt.close()
 
 
-def plot_win_probability_by_noise(df: pd.DataFrame, outpath: Path) -> None:
-    noise_order = ordered_noise_levels(df["noise_level"].unique())
+def plot_win_probability_by_preservation(df: pd.DataFrame, outpath: Path) -> None:
+    preservation_order = ordered_preservation_levels(df["preservation_level"].unique())
     pivot = (
         df[df["mitigated"] == False]
-        .pivot(index="noise_level", columns="circuit_type", values="win_probability")
-        .reindex(noise_order)
+        .pivot(index="preservation_level", columns="circuit_type", values="win_probability")
+        .reindex(preservation_order)
     )
 
     plt.figure(figsize=(7, 5))
     for col in pivot.columns:
         plt.plot(pivot.index, pivot[col], marker="o", label=col)
     plt.axhline(NONCONTEXTUAL_WIN_BOUND, color="#444444", linestyle="--", linewidth=1, label="classical bound")
-    plt.title("Magic-Square Win Rate vs Noise Level")
-    plt.xlabel("Noise level")
+    plt.title("Magic-Square Win Rate vs Preservation Level")
+    plt.xlabel("Preservation level")
     plt.ylabel("Mean win probability")
     plt.legend()
     plt.tight_layout()
@@ -1232,12 +1280,12 @@ def plot_win_probability_by_noise(df: pd.DataFrame, outpath: Path) -> None:
     plt.close()
 
 
-def plot_contextuality_by_noise(df: pd.DataFrame, outpath: Path) -> None:
-    noise_order = ordered_noise_levels(df["noise_level"].unique())
+def plot_contextuality_by_preservation(df: pd.DataFrame, outpath: Path) -> None:
+    preservation_order = ordered_preservation_levels(df["preservation_level"].unique())
     pivot = (
         df[df["mitigated"] == False]
-        .pivot(index="noise_level", columns="circuit_type", values="contextuality_violation")
-        .reindex(noise_order)
+        .pivot(index="preservation_level", columns="circuit_type", values="contextuality_violation")
+        .reindex(preservation_order)
     )
 
     plt.figure(figsize=(7, 5))
@@ -1252,8 +1300,8 @@ def plot_contextuality_by_noise(df: pd.DataFrame, outpath: Path) -> None:
         plt.bar(x, pivot[cols[0]].values, width=width, label=cols[0])
 
     plt.xticks(x, pivot.index)
-    plt.title("Mean Contextuality Violation by Circuit Type and Noise Level")
-    plt.xlabel("Noise level")
+    plt.title("Mean Contextuality Violation by Circuit Type and Preservation Level")
+    plt.xlabel("Preservation level")
     plt.ylabel("Normalized contextuality violation")
     plt.legend()
     plt.tight_layout()
@@ -1367,8 +1415,14 @@ def parse_args() -> ExperimentConfig:
         ),
     )
     parser.add_argument(
+        "--preservation-levels",
+        default=os.getenv("MP_PRESERVATION_LEVELS", os.getenv("MP_NOISE_LEVELS", ",".join(DEFAULT_PRESERVATION_LEVEL_ORDER))),
+    )
+    parser.add_argument(
         "--noise-levels",
-        default=os.getenv("MP_NOISE_LEVELS", ",".join(DEFAULT_NOISE_LEVEL_ORDER)),
+        dest="preservation_levels_legacy",
+        default=None,
+        help="Legacy alias for --preservation-levels.",
     )
     parser.add_argument(
         "--circuit-types",
@@ -1394,30 +1448,25 @@ def parse_args() -> ExperimentConfig:
     args = parser.parse_args()
 
     zne_scale_factors = [int(v.strip()) for v in args.zne_scale_factors.split(",") if v.strip()]
-    noise_levels = [v.strip() for v in args.noise_levels.split(",") if v.strip()]
+    raw_preservation_levels = args.preservation_levels_legacy or args.preservation_levels
+    preservation_levels = [v.strip() for v in raw_preservation_levels.split(",") if v.strip()]
     circuit_types = [v.strip() for v in args.circuit_types.split(",") if v.strip()]
     contexts = [v.strip() for v in args.contexts.split(",") if v.strip()]
     mitigation_modes = parse_bool_csv(args.mitigation_modes)
 
     if args.smoke_test:
-        if not noise_levels:
-            noise_levels = ["low"]
+        if not preservation_levels:
+            preservation_levels = ["low"]
         else:
-            noise_levels = [noise_levels[0]]
+            preservation_levels = [preservation_levels[0]]
         args.shots = min(args.shots, 256)
         zne_scale_factors = [1, 3]
 
-    if args.use_real_backend and noise_levels == DEFAULT_NOISE_LEVEL_ORDER:
-        noise_levels = [REAL_BACKEND_NOISE_LABEL]
-
-    invalid_noise = [
-        v for v in noise_levels
-        if v not in NOISE_LEVELS and not (args.use_real_backend and v == REAL_BACKEND_NOISE_LABEL)
-    ]
+    invalid_preservation = [v for v in preservation_levels if v not in PRESERVATION_LEVELS]
     invalid_circuits = [v for v in circuit_types if v not in DEFAULT_CIRCUIT_TYPES]
     invalid_contexts = [v for v in contexts if v not in QUERY_CONFIGS]
-    if invalid_noise:
-        raise ValueError(f"Unsupported noise levels: {invalid_noise}")
+    if invalid_preservation:
+        raise ValueError(f"Unsupported preservation levels: {invalid_preservation}")
     if invalid_circuits:
         raise ValueError(f"Unsupported circuit types: {invalid_circuits}")
     if invalid_contexts:
@@ -1433,7 +1482,7 @@ def parse_args() -> ExperimentConfig:
     return ExperimentConfig(
         shots=args.shots,
         zne_scale_factors=zne_scale_factors,
-        noise_levels=noise_levels,
+        preservation_levels=preservation_levels,
         circuit_types=circuit_types,
         mitigation_modes=mitigation_modes,
         contexts=contexts,
@@ -1454,24 +1503,14 @@ def main() -> None:
         flush=True,
     )
 
-    contextual = build_contextuality_preserving_prep()
-    contextual.name = "contextuality-preserving"
-
-    baseline = build_baseline_prep()
-    baseline.name = "baseline"
-
-    prep_map = {
-        "contextuality-preserving": contextual,
-        "baseline": baseline,
-    }
-
     records: List[RunRecord] = []
     context_records: List[ContextRecord] = []
     execution_manifest = {
         "seed": SEED,
         "shots": config.shots,
         "zne_scale_factors": config.zne_scale_factors,
-        "noise_levels": config.noise_levels,
+        "preservation_levels": config.preservation_levels,
+        "local_simulation_noise": LOCAL_SIMULATION_NOISE,
         "circuit_types": config.circuit_types,
         "mitigation_modes": config.mitigation_modes,
         "contexts": config.contexts,
@@ -1483,22 +1522,27 @@ def main() -> None:
     }
     save_json(execution_manifest, config.outdir / "run_manifest.json")
 
-    total_runs = len(config.noise_levels) * len(config.mitigation_modes) * len(config.circuit_types)
+    total_runs = len(config.preservation_levels) * len(config.mitigation_modes) * len(config.circuit_types)
     current_run = 0
-    for noise_level in config.noise_levels:
+    for preservation_level in config.preservation_levels:
         for mitigated in config.mitigation_modes:
             for circuit_type in config.circuit_types:
                 current_run += 1
+                if circuit_type == "contextuality-preserving":
+                    prep_circuit = build_contextuality_preserving_prep(preservation_level)
+                else:
+                    prep_circuit = build_baseline_prep(preservation_level)
+                prep_circuit.name = circuit_type
                 print(
                     f"[batch] {current_run}/{total_runs} circuit={circuit_type} "
-                    f"noise={noise_level} mitigated={mitigated}",
+                    f"preservation={preservation_level} mitigated={mitigated}",
                     flush=True,
                 )
                 record, per_context = run_family(
                     config=config,
                     circuit_type=circuit_type,
-                    prep_circuit=prep_map[circuit_type],
-                    noise_level=noise_level,
+                    prep_circuit=prep_circuit,
+                    preservation_level=preservation_level,
                     mitigated=mitigated,
                 )
                 records.append(record)
@@ -1525,6 +1569,9 @@ def main() -> None:
 
     summary_tables = build_interpretable_summary_tables(df, context_df)
     save_dataframe(summary_tables["paper_summary"], config.outdir / "table_paper_summary.csv")
+    summary_tables["fidelity_table"].to_csv(config.outdir / "table_fidelity_by_preservation_level.csv")
+    summary_tables["win_rate_table"].to_csv(config.outdir / "table_win_rate_by_preservation_level.csv")
+    summary_tables["contextuality_table"].to_csv(config.outdir / "table_contextuality_by_preservation_level.csv")
     summary_tables["fidelity_table"].to_csv(config.outdir / "table_fidelity_by_noise.csv")
     summary_tables["win_rate_table"].to_csv(config.outdir / "table_win_rate_by_noise.csv")
     summary_tables["contextuality_table"].to_csv(config.outdir / "table_contextuality_by_noise.csv")
@@ -1541,9 +1588,12 @@ def main() -> None:
     )
 
     # Plots similar to the paper
-    plot_fidelity_by_noise(df, config.outdir / "figure_fidelity_vs_noise.png")
-    plot_win_probability_by_noise(df, config.outdir / "figure_win_rate_vs_noise.png")
-    plot_contextuality_by_noise(df, config.outdir / "figure_contextuality_vs_noise.png")
+    plot_fidelity_by_preservation(df, config.outdir / "figure_fidelity_vs_preservation_level.png")
+    plot_win_probability_by_preservation(df, config.outdir / "figure_win_rate_vs_preservation_level.png")
+    plot_contextuality_by_preservation(df, config.outdir / "figure_contextuality_vs_preservation_level.png")
+    plot_fidelity_by_preservation(df, config.outdir / "figure_fidelity_vs_noise.png")
+    plot_win_probability_by_preservation(df, config.outdir / "figure_win_rate_vs_noise.png")
+    plot_contextuality_by_preservation(df, config.outdir / "figure_contextuality_vs_noise.png")
     plot_contextuality_vs_fidelity(df, config.outdir / "figure_contextuality_vs_fidelity.png")
     if set(config.mitigation_modes) >= {False, True}:
         plot_pre_post_mitigation(df, config.outdir / "figure_pre_post_mitigation.png")

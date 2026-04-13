@@ -1,0 +1,10 @@
+noise_level,mitigated,query_name,row_index,column_index,win_probability,fidelity,trace_distance
+high,False,R2C3,2,3,0.725708,0.725547,0.274292
+high,False,R3C2,3,2,0.73291,0.732851,0.26709
+high,False,R3C3,3,3,0.744873,0.744724,0.255127
+low,False,R2C3,2,3,0.917358,0.917184,0.082642
+low,False,R3C2,3,2,0.919312,0.919158,0.080688
+low,False,R3C3,3,3,0.923462,0.923328,0.076538
+medium,False,R2C3,2,3,0.837891,0.837688,0.162109
+medium,False,R3C2,3,2,0.843384,0.843225,0.156616
+medium,False,R3C3,3,3,0.847656,0.847456,0.152344

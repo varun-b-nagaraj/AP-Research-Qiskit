@@ -1,0 +1,4 @@
+noise_level,mitigated,delta_win_probability,delta_contextuality,delta_fidelity,delta_trace_distance
+high,False,0.047824,0.0,0.047817,-0.047824
+low,False,0.016873,0.151855,0.016885,-0.016805
+medium,False,0.031277,0.067505,0.031294,-0.031277

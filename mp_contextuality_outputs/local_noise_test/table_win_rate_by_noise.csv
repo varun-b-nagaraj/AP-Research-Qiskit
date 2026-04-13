@@ -1,0 +1,6 @@
+circuit_short,baseline,preserving
+mitigation_label,pre,pre
+noise_level,,
+low,0.93103,0.947903
+medium,0.865112,0.896389
+high,0.764703,0.812527

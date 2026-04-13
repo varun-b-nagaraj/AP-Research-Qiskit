@@ -15,18 +15,11 @@
     "R3C2",
     "R3C3"
   ],
-  "generated_at_unix": 1776041827.164402,
-  "local_simulation_noise": {
-    "readout_p01": 0.02,
-    "readout_p10": 0.02,
-    "single_qubit_depol": 0.003,
-    "two_qubit_depol": 0.02
-  },
+  "generated_at_unix": 1776033966.0171468,
   "mitigation_modes": [
-    false,
-    true
+    false
   ],
-  "preservation_levels": [
+  "noise_levels": [
     "low",
     "medium",
     "high"
@@ -35,7 +28,7 @@
   "shots": 8192,
   "smoke_test": false,
   "use_backend_mimic": false,
-  "use_real_backend": true,
+  "use_real_backend": false,
   "zne_scale_factors": [
     1,
     3,
