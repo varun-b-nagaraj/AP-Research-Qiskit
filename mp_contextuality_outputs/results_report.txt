@@ -1,14 +1,14 @@
 Mermin-Peres Magic-Square Experiment Report
 
 Headline findings
-- Best condition: contextuality-preserving at preservation=medium with mitigated=True, win_probability=0.890359, fidelity=0.889409, contextuality=0.013229
-- Worst condition: baseline at preservation=low with mitigated=False, win_probability=0.753662, fidelity=0.753286, contextuality=0.000000
-- Mean pre-mitigation win rate: preserving=0.797897, baseline=0.763310
-- Mean post-mitigation win rate: preserving=0.886262, baseline=0.868148
+- Best condition: contextuality-medium with mitigated=True, win_probability=0.900385, fidelity=0.898732, pm_contextuality=1.000000
+- Worst condition: baseline with mitigated=False, win_probability=0.753811, fidelity=0.753368, pm_contextuality=1.000000
+- Mean pre-mitigation win rate: preserving=0.802052, baseline=0.753811
+- Mean post-mitigation win rate: preserving=0.898134, baseline=0.863088
 
 Weakest query pairs overall
-- R3C2 (baseline, preservation=low, mitigated=False): win_probability=0.693115, fidelity=0.692945, trace_distance=0.306885
-- R2C2 (baseline, preservation=low, mitigated=False): win_probability=0.694946, fidelity=0.694383, trace_distance=0.305054
-- R2C2 (baseline, preservation=medium, mitigated=False): win_probability=0.697266, fidelity=0.696944, trace_distance=0.302734
-- R3C2 (baseline, preservation=medium, mitigated=False): win_probability=0.720459, fidelity=0.720112, trace_distance=0.279541
-- R2C3 (baseline, preservation=medium, mitigated=False): win_probability=0.724487, fidelity=0.724167, trace_distance=0.275513
+- R3C2 (baseline, mitigated=False): win_probability=0.691772, fidelity=0.691649, trace_distance=0.308228
+- R2C2 (baseline, mitigated=False): win_probability=0.692627, fidelity=0.692070, trace_distance=0.307373
+- R2C1 (baseline, mitigated=False): win_probability=0.696045, fidelity=0.695685, trace_distance=0.303955
+- R2C3 (baseline, mitigated=False): win_probability=0.748291, fidelity=0.748039, trace_distance=0.251709
+- R2C2 (contextuality-low, mitigated=False): win_probability=0.750488, fidelity=0.749776, trace_distance=0.249512

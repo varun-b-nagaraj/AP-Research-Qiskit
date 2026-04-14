@@ -1,7 +1,5 @@
-circuit_type,preservation_level,gain_win_probability,gain_contextuality,gain_fidelity,gain_trace_distance
-baseline,low,0.123133,0.0,0.12181,-0.121133
-baseline,medium,0.119447,0.0,0.118642,-0.115631
-baseline,high,0.071933,0.0,0.07109,-0.070292
-contextuality-preserving,low,0.097192,0.0,0.096133,-0.094378
-contextuality-preserving,medium,0.082715,0.013229,0.082058,-0.08116
-contextuality-preserving,high,0.085189,0.000711,0.084166,-0.081981
+circuit_type,gain_win_probability,gain_contextuality,gain_fidelity,gain_trace_distance
+baseline,0.109277,0.0,0.108486,-0.109217
+contextuality-high,0.089776,0.0,0.089074,-0.086583
+contextuality-low,0.103885,0.0,0.103186,-0.099395
+contextuality-medium,0.094586,0.0,0.093266,-0.088318

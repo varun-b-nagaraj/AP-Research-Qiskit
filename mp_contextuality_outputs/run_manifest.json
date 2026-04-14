@@ -1,7 +1,9 @@
 {
   "backend_name": "auto",
   "circuit_types": [
-    "contextuality-preserving",
+    "contextuality-low",
+    "contextuality-medium",
+    "contextuality-high",
     "baseline"
   ],
   "contexts": [
@@ -15,7 +17,7 @@
     "R3C2",
     "R3C3"
   ],
-  "generated_at_unix": 1776042457.595276,
+  "generated_at_unix": 1776066419.6695309,
   "local_simulation_noise": {
     "readout_p01": 0.02,
     "readout_p10": 0.02,
@@ -25,11 +27,6 @@
   "mitigation_modes": [
     false,
     true
-  ],
-  "preservation_levels": [
-    "low",
-    "medium",
-    "high"
   ],
   "seed": 7,
   "shots": 8192,

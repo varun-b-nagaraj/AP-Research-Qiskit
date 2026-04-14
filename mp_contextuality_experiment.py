@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Mermin–Peres contextuality experiment driver
+Mermin–Peres Contextuality Analysis Script
 --------------------------------------------
 
-What this script does:
+Script functionality:
 - Builds four circuit families:
     1) contextuality-low
     2) contextuality-medium
@@ -11,18 +11,16 @@ What this script does:
     4) baseline (no preservation)
 - Uses 8192 shots per circuit configuration
 - Computes:
-    * fidelity-like overlap with ideal parity distributions
-    * trace distance to ideal parity distributions
-    * normalized Peres-Mermin contextuality violation score
-- Applies manual zero-noise extrapolation (ZNE) with global gate folding
-- Saves raw results + summary CSV + plots
+    * Uses ideal parity distribution to calculate fidelity overlap and trace distances
+    * Trace distance calculated to ideal parity distributions
+    * Normalizes Mermin-Peres contextuality score via the raw win rate (anything above classical bound of 8/9)
+- Global gate folding used to apply manual Zero-Noise Extrapolation (ZNE) with scale factors [1, 3, 5]
+- Raw results saved and auto-generates tables and plots
+- Set up a local python environment and set up qiskit SDK api key for true hosted testing
 
 Notes:
-- This is a faithful implementation of the *methodology* in your paper,
-  but not a guaranteed exact reproduction of unpublished source code.
-- The experiment is implemented as the 3x3 Mermin-Peres magic-square game on two EPR pairs.
-- Contextuality score is normalized from magic-square win rate using the classical bound 8/9
-  and the ideal quantum value 1.
+- 2 EPI pairs with a 3x3 Mermin-Peres magic squares game
+- Contextuality score is derived from contextuality violations anytime the win rate exceens classical bound of 8/9
 """
 
 from __future__ import annotations

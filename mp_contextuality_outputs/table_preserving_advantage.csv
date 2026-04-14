@@ -1,7 +1,7 @@
-preservation_level,mitigated,delta_win_probability,delta_contextuality,delta_fidelity,delta_trace_distance
-high,False,0.023777,0.0,0.023871,-0.023777
-high,True,0.037032,0.000711,0.036946,-0.035465
-low,False,0.028605,0.0,0.028515,-0.028605
-low,True,0.002664,0.0,0.002837,-0.00185
-medium,False,0.051378,0.0,0.051503,-0.051378
-medium,True,0.014645,0.013229,0.01492,-0.016907
+circuit_type,mitigated,delta_win_probability,delta_contextuality,delta_fidelity,delta_trace_distance
+contextuality-low,False,0.041192,0.0,0.04117,-0.041192
+contextuality-medium,False,0.051988,0.0,0.052098,-0.051988
+contextuality-high,False,0.051541,0.0,0.051506,-0.051541
+contextuality-low,True,0.0358,0.0,0.03587,-0.03137
+contextuality-medium,True,0.037297,0.0,0.036878,-0.031089
+contextuality-high,True,0.03204,0.0,0.032094,-0.028907
